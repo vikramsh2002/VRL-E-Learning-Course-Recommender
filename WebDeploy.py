@@ -110,7 +110,7 @@ def sublayout(cname):
     return s
 def button(url):
     s='''
-    <a href="{}"><button> Go to Course </button></a>
+    <a href="{}" target="_blank" ><button> Go to Course </button></a>
     
     '''.format(url)
     return s
