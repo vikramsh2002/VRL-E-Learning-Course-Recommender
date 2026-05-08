@@ -1,3 +1,4 @@
+import base64
 from collections import Counter
 from html import escape
 from pathlib import Path
@@ -11,7 +12,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 APP_DIR = Path(__file__).parent
 DATA_PATH = APP_DIR / "CourseDetails.csv"
-LOGO_PATH = APP_DIR / "MyLogoLight.png"
+LOGO_PATH = APP_DIR / "VRLLogoTransparentSharp.png"
 
 ALL_OPTION = "All"
 MAX_FEATURES = 4000
@@ -44,25 +45,26 @@ def inject_styles() -> None:
         """
         <style>
         :root {
-            --vrl-bg: #070b14;
-            --vrl-bg-2: #0b1220;
-            --vrl-border: #243348;
-            --vrl-muted: #99a8bd;
-            --vrl-text: #edf4ff;
-            --vrl-panel: #101827;
-            --vrl-panel-2: #0d1524;
-            --vrl-soft: #162235;
-            --vrl-blue: #60a5fa;
-            --vrl-cyan: #22d3ee;
-            --vrl-green: #34d399;
-            --vrl-amber: #fbbf24;
+            --vrl-bg: #05070b;
+            --vrl-bg-2: #0a111a;
+            --vrl-border: #263344;
+            --vrl-border-strong: #35516d;
+            --vrl-muted: #a3b2c6;
+            --vrl-text: #f2f6fb;
+            --vrl-panel: #101821;
+            --vrl-panel-2: #0c131c;
+            --vrl-soft: #172332;
+            --vrl-blue: #2f7de1;
+            --vrl-blue-bright: #5ba9ff;
+            --vrl-silver: #c7d0db;
+            --vrl-platinum: #e7e1d4;
+            --vrl-gold: #d7b56d;
         }
 
         .stApp {
             background:
-                radial-gradient(circle at top left, rgba(37, 99, 235, 0.22), transparent 30rem),
-                radial-gradient(circle at top right, rgba(34, 211, 238, 0.14), transparent 24rem),
-                linear-gradient(180deg, var(--vrl-bg) 0%, #0a1020 46%, #060a12 100%);
+                linear-gradient(135deg, rgba(47, 125, 225, 0.13) 0%, rgba(47, 125, 225, 0.03) 36%, rgba(5, 7, 11, 0) 64%),
+                linear-gradient(180deg, #070b11 0%, var(--vrl-bg-2) 48%, #05070b 100%);
             color: var(--vrl-text);
         }
 
@@ -82,7 +84,7 @@ def inject_styles() -> None:
 
         [data-testid="stSidebar"] {
             background:
-                linear-gradient(180deg, rgba(16, 24, 39, 0.98), rgba(9, 14, 24, 0.98));
+                linear-gradient(180deg, rgba(12, 19, 28, 0.99), rgba(6, 9, 14, 0.99));
             border-right: 1px solid var(--vrl-border);
         }
 
@@ -95,6 +97,24 @@ def inject_styles() -> None:
         [data-testid="stSidebar"] [data-baseweb="popover"] {
             background: var(--vrl-panel-2);
             border-color: var(--vrl-border);
+        }
+
+        .vrl-sidebar-brand {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 0.85rem 0.4rem;
+            margin: 0 0 1rem;
+            border: 1px solid rgba(199, 208, 219, 0.12);
+            border-radius: 8px;
+            background:
+                linear-gradient(180deg, rgba(242, 246, 251, 0.055), rgba(47, 125, 225, 0.045));
+        }
+
+        .vrl-sidebar-brand img {
+            width: min(188px, 88%);
+            height: auto;
+            display: block;
         }
 
         [data-testid="stMetric"] {
@@ -110,22 +130,53 @@ def inject_styles() -> None:
             border-radius: 8px;
             box-shadow: 0 18px 38px rgba(0, 0, 0, 0.26);
             background:
-                linear-gradient(180deg, rgba(16, 24, 39, 0.96), rgba(13, 21, 36, 0.96));
+                linear-gradient(180deg, rgba(16, 24, 33, 0.97), rgba(10, 16, 24, 0.97));
         }
 
         .vrl-header {
+            position: relative;
+            overflow: hidden;
             border: 1px solid var(--vrl-border);
             border-radius: 8px;
-            background: rgba(16, 24, 39, 0.92);
-            padding: 1rem 1.1rem;
+            background:
+                linear-gradient(135deg, rgba(47, 125, 225, 0.18), rgba(16, 24, 33, 0.92) 48%, rgba(8, 12, 18, 0.96));
+            padding: 1.05rem 1.25rem 1.05rem 1.45rem;
             margin-bottom: 1rem;
             box-shadow: 0 16px 34px rgba(0, 0, 0, 0.26);
         }
 
-        .vrl-title {
-            font-size: 2.15rem;
+        .vrl-header::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(180deg, var(--vrl-blue-bright), var(--vrl-gold));
+        }
+
+        .vrl-header-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.25rem;
+        }
+
+        .vrl-header-copy {
+            min-width: 0;
+        }
+
+        .vrl-eyebrow {
+            color: var(--vrl-gold);
+            font-size: 0.78rem;
             font-weight: 760;
-            line-height: 1.08;
+            margin: 0 0 0.28rem;
+        }
+
+        .vrl-title {
+            font-size: 1.58rem;
+            font-weight: 760;
+            line-height: 1.14;
             letter-spacing: 0;
             margin: 0;
             color: var(--vrl-text);
@@ -133,9 +184,42 @@ def inject_styles() -> None:
 
         .vrl-subtitle {
             color: var(--vrl-muted);
-            font-size: 0.98rem;
-            line-height: 1.45;
-            margin: 0.35rem 0 0;
+            font-size: 0.95rem;
+            line-height: 1.42;
+            margin: 0.32rem 0 0;
+            max-width: 42rem;
+        }
+
+        .vrl-header-pills {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 0.45rem;
+            min-width: 15rem;
+        }
+
+        .vrl-header-pill {
+            border: 1px solid rgba(91, 169, 255, 0.3);
+            border-radius: 6px;
+            background: rgba(5, 7, 11, 0.34);
+            color: #d8e8fb;
+            font-size: 0.78rem;
+            font-weight: 680;
+            padding: 0.3rem 0.52rem;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 760px) {
+            .vrl-header-content {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 0.85rem;
+            }
+
+            .vrl-header-pills {
+                justify-content: flex-start;
+                min-width: 0;
+            }
         }
 
         .vrl-section-title {
@@ -154,7 +238,7 @@ def inject_styles() -> None:
         }
 
         .vrl-rank {
-            color: var(--vrl-blue);
+            color: var(--vrl-gold);
             font-weight: 760;
             font-size: 0.9rem;
         }
@@ -162,7 +246,7 @@ def inject_styles() -> None:
         .vrl-badge {
             border: 1px solid var(--vrl-border);
             border-radius: 6px;
-            color: #dbeafe;
+            color: var(--vrl-platinum);
             background: var(--vrl-soft);
             font-size: 0.78rem;
             font-weight: 650;
@@ -188,7 +272,7 @@ def inject_styles() -> None:
         }
 
         .vrl-description {
-            color: #c5d2e5;
+            color: #cad4df;
             font-size: 0.9rem;
             line-height: 1.45;
             min-height: 3.9rem;
@@ -203,10 +287,10 @@ def inject_styles() -> None:
         }
 
         .vrl-chip {
-            border: 1px solid rgba(96, 165, 250, 0.36);
+            border: 1px solid rgba(91, 169, 255, 0.34);
             border-radius: 6px;
-            color: #bfdbfe;
-            background: rgba(37, 99, 235, 0.16);
+            color: #cfe7ff;
+            background: rgba(47, 125, 225, 0.15);
             font-size: 0.78rem;
             font-weight: 620;
             padding: 0.18rem 0.45rem;
@@ -238,7 +322,7 @@ def inject_styles() -> None:
         }
 
         div[data-testid="stTabs"] button[aria-selected="true"] p {
-            color: var(--vrl-cyan);
+            color: var(--vrl-blue-bright);
         }
 
         div[data-testid="stExpander"] {
@@ -274,7 +358,7 @@ def inject_styles() -> None:
         }
 
         div[data-testid="stProgress"] > div > div {
-            background: rgba(96, 165, 250, 0.18);
+            background: rgba(91, 169, 255, 0.18);
         }
 
         div.stButton > button,
@@ -286,14 +370,14 @@ def inject_styles() -> None:
 
         div.stButton > button[kind="primary"],
         div[data-testid="stLinkButton"] > a[kind="primary"] {
-            background: linear-gradient(135deg, #2563eb, #0891b2);
-            border: 1px solid rgba(147, 197, 253, 0.45);
+            background: linear-gradient(135deg, #1f5fb8, #2f7de1);
+            border: 1px solid rgba(91, 169, 255, 0.5);
             color: #ffffff;
         }
 
         div.stButton > button:hover,
         div[data-testid="stLinkButton"] > a:hover {
-            border-color: var(--vrl-cyan);
+            border-color: var(--vrl-blue-bright);
             color: #ffffff;
         }
         </style>
@@ -321,6 +405,14 @@ def truncate_text(text: str, max_chars: int = 230) -> str:
 
     truncated = normalized[:max_chars].rsplit(" ", 1)[0].strip()
     return f"{truncated}..."
+
+
+def logo_data_uri() -> str | None:
+    if not LOGO_PATH.exists():
+        return None
+
+    encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 @st.cache_data(show_spinner="Loading course catalog...")
@@ -526,19 +618,25 @@ def filter_key(
 
 
 def render_header() -> None:
-    with st.container(border=True):
-        logo_col, text_col = st.columns([0.09, 0.91], vertical_alignment="center")
-        with logo_col:
-            if LOGO_PATH.exists():
-                st.image(str(LOGO_PATH), width=84)
-        with text_col:
-            st.markdown(
-                """
-                <p class="vrl-title">VRL Course Intelligence</p>
-                <p class="vrl-subtitle">Analytics dashboard for Coursera course discovery.</p>
-                """,
-                unsafe_allow_html=True,
-            )
+    st.markdown(
+        """
+        <section class="vrl-header">
+            <div class="vrl-header-content">
+                <div class="vrl-header-copy">
+                    <p class="vrl-eyebrow">Learning Intelligence</p>
+                    <p class="vrl-title">VRL Course Recommender</p>
+                    <p class="vrl-subtitle">Find a stronger next course from the catalog in view.</p>
+                </div>
+                <div class="vrl-header-pills" aria-label="Recommendation context">
+                    <span class="vrl-header-pill">Catalog</span>
+                    <span class="vrl-header-pill">Skill Match</span>
+                    <span class="vrl-header-pill">Ratings</span>
+                </div>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_metrics(courses: pd.DataFrame, filtered_courses: pd.DataFrame) -> None:
@@ -657,8 +755,16 @@ def render_course_grid(
 
 
 def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]]:
-    if LOGO_PATH.exists():
-        st.sidebar.image(str(LOGO_PATH), width=140)
+    logo_uri = logo_data_uri()
+    if logo_uri:
+        st.sidebar.markdown(
+            f"""
+            <div class="vrl-sidebar-brand">
+                <img src="{logo_uri}" alt="VRL logo" />
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.sidebar.markdown("### Filters")
     search_query = st.sidebar.text_input(
