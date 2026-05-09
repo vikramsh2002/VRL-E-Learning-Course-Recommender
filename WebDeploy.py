@@ -487,12 +487,45 @@ def inject_styles() -> None:
             padding: 0.45rem 0.56rem;
         }
 
+        .vrl-progress-summary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin: 0.65rem 0 0.2rem;
+        }
+
+        .vrl-progress-stat {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background: rgba(16, 24, 33, 0.72);
+            padding: 0.72rem;
+        }
+
+        .vrl-progress-label {
+            color: var(--vrl-muted);
+            font-size: 0.78rem;
+            font-weight: 680;
+            margin-bottom: 0.22rem;
+        }
+
+        .vrl-progress-value {
+            color: var(--vrl-text);
+            font-size: 0.98rem;
+            font-weight: 760;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+
         @media (max-width: 920px) {
             .vrl-roadmap {
                 grid-template-columns: 1fr;
             }
 
             .vrl-check-list {
+                grid-template-columns: 1fr;
+            }
+
+            .vrl-progress-summary {
                 grid-template-columns: 1fr;
             }
         }
@@ -753,6 +786,8 @@ def top_skill_options(skill_rows: tuple[tuple[str, ...], ...], limit: int = 18) 
 
 def ensure_session_state() -> None:
     st.session_state.setdefault("shortlist", [])
+    st.session_state.setdefault("completed_courses", [])
+    st.session_state.setdefault("practice_anchor_course_key", "")
     st.session_state.setdefault("recommendations", None)
     st.session_state.setdefault("recommendation_context", None)
     st.session_state.setdefault("advisor_recommendations", None)
@@ -806,6 +841,73 @@ def toggle_shortlist(course_name: str) -> None:
         shortlist.append(course_name)
         st.session_state["pending_toast"] = "Saved to shortlist"
     st.session_state["shortlist"] = shortlist
+
+
+def is_course_completed(course_key: object) -> bool:
+    return str(course_key) in set(st.session_state.get("completed_courses", []))
+
+
+def mark_course_completed(course_key: object, course_name: object) -> bool:
+    key = str(course_key)
+    completed = list(st.session_state.get("completed_courses", []))
+    already_completed = key in completed
+    if not already_completed:
+        completed.append(key)
+        st.session_state["completed_courses"] = completed
+
+    st.session_state["practice_anchor_course_key"] = key
+    st.session_state["pending_toast"] = f"Progress updated: {course_name}"
+    return not already_completed
+
+
+def toggle_completed_course(course_key: object, course_name: object) -> None:
+    key = str(course_key)
+    completed = list(st.session_state.get("completed_courses", []))
+    if key in completed:
+        completed.remove(key)
+        if st.session_state.get("practice_anchor_course_key") == key:
+            st.session_state["practice_anchor_course_key"] = completed[-1] if completed else ""
+        st.session_state["pending_toast"] = f"Removed from progress: {course_name}"
+    else:
+        completed.append(key)
+        st.session_state["practice_anchor_course_key"] = key
+        st.session_state["pending_toast"] = f"Marked completed: {course_name}"
+
+    st.session_state["completed_courses"] = completed
+
+
+def completed_course_frame(courses: pd.DataFrame) -> pd.DataFrame:
+    completed_keys = list(dict.fromkeys(str(key) for key in st.session_state.get("completed_courses", [])))
+    if not completed_keys:
+        return courses.iloc[0:0].copy()
+
+    completed = courses[courses["Course Key"].astype(str).isin(completed_keys)].copy()
+    order = {key: index for index, key in enumerate(completed_keys)}
+    completed["_progress_order"] = completed["Course Key"].astype(str).map(order)
+    return completed.sort_values("_progress_order").drop(columns=["_progress_order"])
+
+
+def latest_completed_course(courses: pd.DataFrame) -> pd.Series | None:
+    completed = completed_course_frame(courses)
+    if completed.empty:
+        return None
+    return completed.iloc[-1]
+
+
+def active_practice_course(courses: pd.DataFrame, fallback_courses: pd.DataFrame | None = None) -> pd.Series | None:
+    anchor_key = str(st.session_state.get("practice_anchor_course_key", ""))
+    if anchor_key:
+        anchor_rows = courses[courses["Course Key"].astype(str) == anchor_key]
+        if not anchor_rows.empty:
+            return anchor_rows.iloc[0]
+
+    latest = latest_completed_course(courses)
+    if latest is not None:
+        return latest
+
+    if fallback_courses is not None and not fallback_courses.empty:
+        return fallback_courses.iloc[0]
+    return None
 
 
 def options_from(series: pd.Series) -> list[str]:
@@ -1023,6 +1125,97 @@ def advisor_query_text(messages: list[dict[str, str]], request: str) -> str:
         if message.get("role") == "user"
     ]
     return expand_goal_text(" ".join([*previous_user_context, request]))
+
+
+def meaningful_tokens(value: object) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9+#.]+", normalize_phrase(value))
+        if token not in SMART_FILTER_STOPWORDS and len(token) > 2
+    }
+
+
+def request_mentions_completion(request: str) -> bool:
+    normalized = normalize_phrase(request)
+    return any(
+        phrase_in_text(term, normalized)
+        for term in (
+            "completed",
+            "complete",
+            "finished",
+            "finish",
+            "done with",
+            "i did",
+            "cleared",
+            "passed",
+        )
+    )
+
+
+def match_course_from_text(request: str, courses: pd.DataFrame) -> pd.Series | None:
+    normalized_request = normalize_phrase(request)
+    request_tokens = meaningful_tokens(request)
+    best_score = 0.0
+    best_token_count = 0
+    best_row: pd.Series | None = None
+
+    for _, course in courses.iterrows():
+        course_name = str(course.get("Course Name", ""))
+        normalized_name = normalize_phrase(course_name)
+        if not normalized_name:
+            continue
+
+        name_tokens = meaningful_tokens(course_name)
+        if not name_tokens:
+            continue
+
+        score = 0.0
+        if phrase_in_text(normalized_name, normalized_request):
+            score = 1.0
+        elif phrase_in_text(normalized_request, normalized_name) and len(request_tokens) >= 2:
+            score = 0.92
+        else:
+            overlap = request_tokens.intersection(name_tokens)
+            precision = len(overlap) / max(len(name_tokens), 1)
+            recall = len(overlap) / max(len(request_tokens), 1)
+            score = (precision * 0.55) + (recall * 0.45)
+            if len(overlap) >= 2:
+                score += 0.12
+            if len(name_tokens) < 2:
+                score *= 0.55
+
+        if score > best_score or (score == best_score and len(name_tokens) > best_token_count):
+            best_score = score
+            best_token_count = len(name_tokens)
+            best_row = course
+
+    return best_row if best_score >= 0.56 else None
+
+
+def progress_note_from_request(request: str, courses: pd.DataFrame) -> str:
+    if not request_mentions_completion(request):
+        return ""
+
+    matched_course = match_course_from_text(request, courses)
+    if matched_course is None:
+        return "I noticed you mentioned a completed course, but I could not confidently match it in the catalog. Use Progress tracker to select it exactly."
+
+    course_name = str(matched_course.get("Course Name", ""))
+    difficulty = str(matched_course.get("Difficulty Level", "Mixed"))
+    mark_course_completed(matched_course.get("Course Key", ""), course_name)
+    return f"Progress updated: I marked {course_name} as completed and set practice to {difficulty} level."
+
+
+def enrich_query_with_progress(query_text: str, courses: pd.DataFrame) -> str:
+    anchor = active_practice_course(courses)
+    if anchor is None:
+        return query_text
+
+    progress_context = " ".join(
+        str(anchor.get(column, ""))
+        for column in ("Course Name", "Difficulty Level", "Skills", "Category", "Provider")
+    )
+    return f"{query_text} completed course context {progress_context}".strip()
 
 
 def goal_terms(goal_text: str) -> list[str]:
@@ -1387,6 +1580,7 @@ def render_header() -> None:
                 </div>
                 <div class="vrl-header-pills" aria-label="Recommendation context">
                     <span class="vrl-header-pill">Catalog</span>
+                    <span class="vrl-header-pill">Progress</span>
                     <span class="vrl-header-pill">Roadmap</span>
                     <span class="vrl-header-pill">Practice</span>
                 </div>
@@ -1436,7 +1630,9 @@ def render_course_card(
 ) -> None:
     course_name = str(course["Course Name"])
     course_key = normalize_course_key(course.get("Course Key", course.name))
+    raw_course_key = str(course.get("Course Key", course_key))
     saved = course_name in st.session_state.get("shortlist", [])
+    completed = is_course_completed(raw_course_key)
     similarity = course.get("Similarity", None)
     similarity_value = None
     if similarity is not None and pd.notna(similarity):
@@ -1475,7 +1671,7 @@ def render_course_card(
         )
         render_skill_chips(course.get("Skill Tokens", ()))
 
-        open_col, save_col = st.columns([0.58, 0.42])
+        open_col, save_col, done_col = st.columns([0.46, 0.27, 0.27])
         with open_col:
             st.link_button(
                 "Open course",
@@ -1490,6 +1686,14 @@ def render_course_card(
                 width="stretch",
                 on_click=toggle_shortlist,
                 args=(course_name,),
+            )
+        with done_col:
+            st.button(
+                "Undo" if completed else "Complete",
+                key=f"{key_prefix}_done_{course_key}",
+                width="stretch",
+                on_click=toggle_completed_course,
+                args=(raw_course_key, course_name),
             )
 
 
@@ -1527,6 +1731,7 @@ def practice_task(
     goal: str,
     deliverables: tuple[str, ...],
     checks: tuple[tuple[str, tuple[str, ...]], ...],
+    minimum_words: int = 45,
 ) -> dict[str, object]:
     return {
         "title": title,
@@ -1534,6 +1739,7 @@ def practice_task(
         "goal": goal,
         "deliverables": deliverables,
         "checks": checks,
+        "minimum_words": minimum_words,
     }
 
 
@@ -1817,15 +2023,16 @@ def practice_word_count(text: str) -> int:
 def validate_practice_attempt(
     attempt_text: str,
     checks: tuple[tuple[str, tuple[str, ...]], ...],
+    minimum_words: int = 45,
 ) -> dict[str, object]:
     normalized_attempt = normalize_phrase(attempt_text)
     passed: list[str] = []
     missing: list[str] = []
 
-    if practice_word_count(attempt_text) >= 45:
+    if practice_word_count(attempt_text) >= minimum_words:
         passed.append("Enough detail")
     else:
-        missing.append("Add at least 45 words across the structured fields")
+        missing.append(f"Add at least {minimum_words} words across the structured fields")
 
     for label, keywords in checks:
         if any(phrase_in_text(keyword, normalized_attempt) for keyword in keywords):
@@ -1848,7 +2055,104 @@ def render_check_items(items: Iterable[str]) -> None:
     st.markdown(f'<div class="vrl-check-list">{item_markup}</div>', unsafe_allow_html=True)
 
 
-def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") -> None:
+def difficulty_practice_profile(difficulty: object) -> dict[str, object]:
+    normalized = normalize_phrase(difficulty)
+    if "advanced" in normalized:
+        return {
+            "label": "Advanced",
+            "scope": "design tradeoffs, edge cases, and a small extension",
+            "minimum_words": 65,
+            "deliverable_prefix": "Advanced proof",
+        }
+    if "intermediate" in normalized:
+        return {
+            "label": "Intermediate",
+            "scope": "a practical mini-build with reasoning",
+            "minimum_words": 55,
+            "deliverable_prefix": "Applied proof",
+        }
+    return {
+        "label": "Beginner",
+        "scope": "guided fundamentals and a small one-sitting exercise",
+        "minimum_words": 35,
+        "deliverable_prefix": "Foundation proof",
+    }
+
+
+def skill_labels_for_course(course: pd.Series | None, limit: int = 4) -> list[str]:
+    if course is None:
+        return []
+    return [
+        format_skill_label(skill)
+        for skill in course.get("Skill Tokens", ())[:limit]
+        if str(skill).strip()
+    ]
+
+
+def build_course_practice_items(
+    course: pd.Series | None,
+    fallback_practice: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if course is None:
+        return fallback_practice
+
+    course_name = str(course.get("Course Name", "Selected course"))
+    difficulty = str(course.get("Difficulty Level", "Beginner"))
+    profile = difficulty_practice_profile(difficulty)
+    skills = skill_labels_for_course(course)
+    skill_text = ", ".join(skills) if skills else "the main course skills"
+    minimum_words = int(profile["minimum_words"])
+    scope = str(profile["scope"])
+    proof_label = str(profile["deliverable_prefix"])
+
+    return [
+        practice_task(
+            f"{profile['label']} skill drill",
+            f"Practice {skill_text} from {course_name} through {scope}.",
+            f"This is anchored to the completed course {course_name}, so the difficulty stays at {difficulty} instead of jumping to a harder track.",
+            (f"{proof_label}: course concept used", "Input or example", "Step-by-step attempt", "Result"),
+            (
+                ("Course concept", tuple(skill.lower() for skill in skills) or ("concept", "skill", "topic")),
+                ("Input or example", ("input", "example", "sample", "scenario")),
+                ("Attempt steps", ("step", "approach", "method", "solve")),
+                ("Result", ("result", "output", "answer", "finding")),
+            ),
+            minimum_words=minimum_words,
+        ),
+        practice_task(
+            f"{profile['label']} mini build",
+            f"Create a tiny artifact using {skill_text}: a script, notebook cell, query, diagram, prompt, or checklist based on the course topic.",
+            f"Checks whether you can turn {course_name} into a concrete output at the same learning level.",
+            ("Goal", "Tool or format", "Build steps", "Working output"),
+            (
+                ("Goal", ("goal", "problem", "task", "objective")),
+                ("Tool or format", ("script", "notebook", "query", "diagram", "prompt", "checklist", "tool")),
+                ("Build steps", ("build", "create", "step", "implement")),
+                ("Working output", ("output", "works", "result", "demo")),
+            ),
+            minimum_words=minimum_words,
+        ),
+        practice_task(
+            f"{profile['label']} review check",
+            f"Explain one concept from {course_name}, show one mistake a learner might make, and write how to fix it.",
+            f"Validates retention from the completed course before recommending harder practice.",
+            ("Concept explanation", "Common mistake", "Fix", "Confidence note"),
+            (
+                ("Concept explanation", ("concept", "means", "explain", "definition")),
+                ("Common mistake", ("mistake", "error", "wrong", "bug")),
+                ("Fix", ("fix", "correct", "solution", "improve")),
+                ("Confidence note", ("confident", "unclear", "practice", "review")),
+            ),
+            minimum_words=minimum_words,
+        ),
+    ]
+
+
+def render_advisor_roadmap(
+    recommendations: pd.DataFrame,
+    catalog_courses: pd.DataFrame,
+    query_text: str = "",
+) -> None:
     if recommendations.empty or "Roadmap Stage" not in recommendations.columns:
         return
 
@@ -1937,6 +2241,7 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
 
         selected_row = roadmap_rows[selected_step]
         selected_course_key = normalize_course_key(selected_row.get("Course Key", selected_row.name))
+        selected_course_completed = is_course_completed(selected_row.get("Course Key", ""))
         st.markdown("##### Current step")
         with st.container(border=True):
             left_col, right_col = st.columns([0.68, 0.32], vertical_alignment="center")
@@ -1967,11 +2272,26 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
                     on_click=toggle_shortlist,
                     args=(str(selected_row.get("Course Name", "")),),
                 )
+                st.button(
+                    "Undo completed" if selected_course_completed else "Complete",
+                    key=f"roadmap_complete_{selected_course_key}",
+                    width="stretch",
+                    on_click=toggle_completed_course,
+                    args=(
+                        str(selected_row.get("Course Key", "")),
+                        str(selected_row.get("Course Name", "")),
+                    ),
+                )
 
     with practice_tab:
-        practice_items = list(bundle["practice"])
+        roadmap_frame = pd.DataFrame(roadmap_rows)
+        practice_anchor = active_practice_course(catalog_courses, roadmap_frame)
+        anchor_key = normalize_course_key(
+            practice_anchor.get("Course Key", "bundle") if practice_anchor is not None else "bundle"
+        )
+        practice_items = build_course_practice_items(practice_anchor, list(bundle["practice"]))
         task_options = list(range(len(practice_items)))
-        task_key = f"advisor_practice_task_{domain}"
+        task_key = f"advisor_practice_task_{domain}_{anchor_key}"
         if st.session_state.get(task_key) not in task_options:
             st.session_state[task_key] = 0
         selected_task = st.pills(
@@ -1989,10 +2309,33 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
         task_goal = str(task.get("goal", "Practice the current topic with a concrete output."))
         deliverables = tuple(str(item) for item in task.get("deliverables", ()))
         checks = tuple(task.get("checks", ()))
-        field_prefix = f"advisor_practice_{domain}_{selected_task}"
+        minimum_words = int(task.get("minimum_words", 45))
+        field_prefix = f"advisor_practice_{domain}_{anchor_key}_{selected_task}"
         result_key = f"{field_prefix}_validation"
 
         with st.container(border=True):
+            if practice_anchor is not None:
+                completed_count = len(st.session_state.get("completed_courses", []))
+                skill_preview = ", ".join(skill_labels_for_course(practice_anchor, limit=3)) or "Course skills"
+                st.markdown(
+                    f"""
+                    <div class="vrl-progress-summary">
+                        <div class="vrl-progress-stat">
+                            <div class="vrl-progress-label">Practice anchor</div>
+                            <div class="vrl-progress-value">{escape(str(practice_anchor.get("Course Name", "")))}</div>
+                        </div>
+                        <div class="vrl-progress-stat">
+                            <div class="vrl-progress-label">Current level</div>
+                            <div class="vrl-progress-value">{escape(str(practice_anchor.get("Difficulty Level", "Mixed")))}</div>
+                        </div>
+                        <div class="vrl-progress-stat">
+                            <div class="vrl-progress-label">Progress</div>
+                            <div class="vrl-progress-value">{completed_count} completed | {escape(skill_preview)}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"### {task_title}")
             st.markdown(
                 f'<div class="vrl-practice-brief"><strong>What this section validates:</strong> '
@@ -2000,6 +2343,7 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
                 unsafe_allow_html=True,
             )
             st.markdown(f"**Task:** {task_body}")
+            st.caption(f"Minimum evidence target: {minimum_words} words. Complete a course to make this practice follow your progress.")
             st.markdown("##### Expected deliverables")
             render_check_items(deliverables)
             st.markdown("##### Validation rubric")
@@ -2026,7 +2370,7 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
             attempt_text = "\n".join([plan, evidence, reflection])
             attempt_signature = normalize_phrase(attempt_text)
             if st.button("Validate practice", type="primary", width="stretch", key=f"{field_prefix}_validate"):
-                validation_result = validate_practice_attempt(attempt_text, checks)
+                validation_result = validate_practice_attempt(attempt_text, checks, minimum_words=minimum_words)
                 validation_result["attempt_signature"] = attempt_signature
                 st.session_state[result_key] = validation_result
 
@@ -2114,14 +2458,17 @@ def render_smart_filter(courses: pd.DataFrame) -> None:
 def submit_advisor_request(
     request: str,
     filtered_courses: pd.DataFrame,
+    catalog_courses: pd.DataFrame,
     recommendation_resources: dict,
     active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
+    progress_note = progress_note_from_request(request, catalog_courses)
     query_text = advisor_query_text(
         st.session_state.get("advisor_messages", []),
         request.strip(),
     )
+    query_text = enrich_query_with_progress(query_text, catalog_courses)
     with st.status("Searching the course catalog", expanded=False) as status:
         status.write("Reading your goal")
         recommendations = recommend_for_goal(
@@ -2134,6 +2481,8 @@ def submit_advisor_request(
         recommendations = sort_recommendations(recommendations, rating_sort)
         recommendations = add_advisor_context(recommendations, query_text)
         reply = advisor_reply(recommendations, len(filtered_courses))
+        if progress_note:
+            reply = f"{progress_note} {reply}"
         status.update(label="Recommendations ready", state="complete", expanded=False)
 
     st.session_state["advisor_recommendations"] = recommendations
@@ -2151,6 +2500,7 @@ def submit_advisor_request(
 
 def render_advisor_chat(
     filtered_courses: pd.DataFrame,
+    catalog_courses: pd.DataFrame,
     recommendation_resources: dict,
     active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
     rating_sort: str,
@@ -2200,6 +2550,7 @@ def render_advisor_chat(
         submit_advisor_request(
             quick_request,
             filtered_courses,
+            catalog_courses,
             recommendation_resources,
             active_filter_key,
             rating_sort,
@@ -2219,6 +2570,7 @@ def render_advisor_chat(
         else:
             render_advisor_roadmap(
                 advisor_recommendations,
+                catalog_courses,
                 st.session_state.get("advisor_query_text", ""),
             )
             with st.expander("All matched courses", expanded=False):
@@ -2237,6 +2589,7 @@ def render_advisor_chat(
         submit_advisor_request(
             str(chat_request).strip(),
             filtered_courses,
+            catalog_courses,
             recommendation_resources,
             active_filter_key,
             rating_sort,
@@ -2340,14 +2693,89 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list
     return search_query, provider, difficulty_level, university, rating_sort, selected_skills
 
 
+def render_progress_tracker(courses: pd.DataFrame) -> None:
+    st.markdown('<div class="vrl-section-title">Progress tracker</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            '<div class="vrl-small-note">Mark completed courses so the practice workspace stays aligned to your current level.</div>',
+            unsafe_allow_html=True,
+        )
+
+        course_label_map = courses.set_index("Course Key")["Course Name"].to_dict()
+        course_options = courses.sort_values("Course Name")["Course Key"].astype(str).to_list()
+        if not course_options:
+            st.warning("No courses available to track.")
+            return
+
+        anchor = active_practice_course(courses)
+        default_key = str(anchor.get("Course Key", "")) if anchor is not None else course_options[0]
+        if default_key not in course_options:
+            default_key = course_options[0]
+
+        tracker_col, action_col = st.columns([0.72, 0.28], vertical_alignment="bottom")
+        with tracker_col:
+            selected_key = st.selectbox(
+                "Completed course",
+                course_options,
+                index=course_options.index(default_key),
+                format_func=lambda key: course_label_map.get(key, key),
+                key="progress_course_picker",
+            )
+        selected_row = courses[courses["Course Key"].astype(str) == selected_key].iloc[0]
+        with action_col:
+            st.button(
+                "Mark completed",
+                type="primary",
+                width="stretch",
+                key="progress_mark_completed",
+                on_click=mark_course_completed,
+                args=(selected_key, str(selected_row.get("Course Name", ""))),
+            )
+
+        completed = completed_course_frame(courses)
+        active_course = active_practice_course(courses)
+        active_name = str(active_course.get("Course Name", "No course selected")) if active_course is not None else "No course selected"
+        active_level = str(active_course.get("Difficulty Level", "Mixed")) if active_course is not None else "Not set"
+        active_skills = ", ".join(skill_labels_for_course(active_course, limit=3)) or "No skill anchor yet"
+        st.markdown(
+            f"""
+            <div class="vrl-progress-summary">
+                <div class="vrl-progress-stat">
+                    <div class="vrl-progress-label">Completed courses</div>
+                    <div class="vrl-progress-value">{len(completed)}</div>
+                </div>
+                <div class="vrl-progress-stat">
+                    <div class="vrl-progress-label">Practice anchor</div>
+                    <div class="vrl-progress-value">{escape(active_name)}</div>
+                </div>
+                <div class="vrl-progress-stat">
+                    <div class="vrl-progress-label">Practice level</div>
+                    <div class="vrl-progress-value">{escape(active_level)} | {escape(active_skills)}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if not completed.empty:
+            with st.expander("Completed courses", expanded=False):
+                display = completed[["Course Name", "Provider", "Difficulty Level", "Rating"]].copy()
+                st.dataframe(display, hide_index=True, width="stretch")
+
+
 def render_recommend_tab(
+    courses: pd.DataFrame,
     filtered_courses: pd.DataFrame,
     recommendation_resources: dict,
     active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
+    render_progress_tracker(courses)
+    st.divider()
+
     render_advisor_chat(
         filtered_courses,
+        courses,
         recommendation_resources,
         active_filter_key,
         rating_sort,
@@ -2569,6 +2997,7 @@ def main() -> None:
 
     with recommend_tab:
         render_recommend_tab(
+            courses,
             filtered_courses,
             recommendation_resources,
             active_filter_key,
