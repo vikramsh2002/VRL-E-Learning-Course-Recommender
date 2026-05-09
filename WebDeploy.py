@@ -2,24 +2,66 @@ import base64
 from collections import Counter
 from html import escape
 from pathlib import Path
+import re
 from typing import Iterable
 
 import pandas as pd
 import streamlit as st
-from sklearn.feature_extraction.text import CountVectorizer
+from joblib import load
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 APP_DIR = Path(__file__).parent
 DATA_PATH = APP_DIR / "CourseDetails.csv"
+INDEX_PATH = APP_DIR / "artifacts" / "recommendation_index.joblib"
 LOGO_PATH = APP_DIR / "VRLLogoTransparentSharp.png"
 
 ALL_OPTION = "All"
-MAX_FEATURES = 4000
+MAX_FEATURES = 25000
 MAX_RECOMMENDATIONS = 12
 SORT_SIMILARITY = "Similarity first"
 SORT_HIGH_TO_LOW = "Rating high to low"
 SORT_LOW_TO_HIGH = "Rating low to high"
+
+SMART_FILTER_STOPWORDS = {
+    "a",
+    "about",
+    "and",
+    "any",
+    "are",
+    "best",
+    "can",
+    "coursera",
+    "course",
+    "courses",
+    "courseware",
+    "find",
+    "for",
+    "from",
+    "futurelearn",
+    "give",
+    "good",
+    "i",
+    "in",
+    "learn",
+    "learning",
+    "me",
+    "microsoft",
+    "mit",
+    "need",
+    "on",
+    "online",
+    "please",
+    "recommend",
+    "show",
+    "that",
+    "the",
+    "to",
+    "training",
+    "want",
+    "with",
+}
 
 REQUIRED_COLUMNS = [
     "Course Name",
@@ -30,6 +72,14 @@ REQUIRED_COLUMNS = [
     "Course Description",
     "Skills",
     "Tags",
+]
+
+CATALOG_COLUMNS = [
+    *REQUIRED_COLUMNS,
+    "Provider",
+    "Category",
+    "Course Key",
+    "Last Verified",
 ]
 
 
@@ -311,6 +361,81 @@ def inject_styles() -> None:
             margin-top: -0.15rem;
         }
 
+        .vrl-chat-bubble {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background: rgba(16, 24, 33, 0.82);
+            color: var(--vrl-text);
+            font-size: 0.86rem;
+            line-height: 1.4;
+            margin: 0.35rem 0;
+            padding: 0.62rem 0.72rem;
+        }
+
+        .vrl-chat-user {
+            border-color: rgba(91, 169, 255, 0.38);
+            background: rgba(47, 125, 225, 0.13);
+        }
+
+        .vrl-chat-assistant {
+            border-color: rgba(215, 181, 109, 0.32);
+        }
+
+        .vrl-advisor-head {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            border: 1px solid rgba(91, 169, 255, 0.28);
+            border-radius: 8px;
+            background:
+                linear-gradient(135deg, rgba(47, 125, 225, 0.16), rgba(16, 24, 33, 0.92));
+            padding: 0.82rem 0.95rem;
+            margin-bottom: 0.72rem;
+        }
+
+        .vrl-bot-avatar {
+            display: grid;
+            place-items: center;
+            width: 2.45rem;
+            height: 2.45rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--vrl-blue), var(--vrl-gold));
+            color: #05070b;
+            font-weight: 800;
+            box-shadow: 0 10px 22px rgba(47, 125, 225, 0.24);
+            flex: 0 0 auto;
+        }
+
+        .vrl-advisor-name {
+            margin: 0;
+            font-weight: 760;
+            font-size: 1.05rem;
+        }
+
+        .vrl-advisor-status {
+            color: var(--vrl-muted);
+            font-size: 0.84rem;
+            margin: 0.15rem 0 0;
+        }
+
+        div[data-testid="stChatMessage"] {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background: rgba(16, 24, 33, 0.78);
+            padding: 0.45rem 0.65rem;
+            margin-bottom: 0.45rem;
+        }
+
+        div[data-testid="stChatInput"] {
+            border-radius: 8px;
+        }
+
+        div[data-testid="stChatInput"] textarea {
+            background: var(--vrl-panel);
+            border-color: var(--vrl-border);
+            color: var(--vrl-text);
+        }
+
         h1, h2, h3, h4 {
             letter-spacing: 0;
             color: var(--vrl-text);
@@ -398,6 +523,18 @@ def format_skill_label(skill: str) -> str:
     return skill.replace("-", " ").replace("_", " ").title()
 
 
+def normalize_phrase(value: object) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9+#.]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def phrase_in_text(phrase: str, text: str) -> bool:
+    if not phrase:
+        return False
+    return f" {phrase} " in f" {text} "
+
+
 def truncate_text(text: str, max_chars: int = 230) -> str:
     normalized = " ".join(str(text).split())
     if len(normalized) <= max_chars:
@@ -405,6 +542,21 @@ def truncate_text(text: str, max_chars: int = 230) -> str:
 
     truncated = normalized[:max_chars].rsplit(" ", 1)[0].strip()
     return f"{truncated}..."
+
+
+def normalize_course_key(value: object) -> str:
+    normalized = " ".join(str(value or "").lower().split())
+    return "".join(char if char.isalnum() else "-" for char in normalized).strip("-")
+
+
+def course_key_from_row(row: pd.Series) -> str:
+    provider = normalize_course_key(row.get("Provider", "Coursera")) or "coursera"
+    source = row.get("Course URL") or row.get("Course Name")
+    return f"{provider}:{normalize_course_key(source)}"
+
+
+def file_mtime(path: Path) -> float:
+    return path.stat().st_mtime if path.exists() else 0.0
 
 
 def logo_data_uri() -> str | None:
@@ -416,7 +568,7 @@ def logo_data_uri() -> str | None:
 
 
 @st.cache_data(show_spinner="Loading course catalog...")
-def load_courses() -> pd.DataFrame:
+def load_courses(data_mtime: float) -> pd.DataFrame:
     courses = pd.read_csv(DATA_PATH, index_col=0)
 
     missing_columns = [col for col in REQUIRED_COLUMNS if col not in courses.columns]
@@ -424,9 +576,19 @@ def load_courses() -> pd.DataFrame:
         missing = ", ".join(missing_columns)
         raise ValueError(f"CourseDetails.csv is missing required columns: {missing}")
 
-    courses = courses[REQUIRED_COLUMNS].copy()
+    for column in CATALOG_COLUMNS:
+        if column not in courses.columns:
+            if column == "Provider":
+                courses[column] = "Coursera"
+            elif column == "Category":
+                courses[column] = "Coursera"
+            else:
+                courses[column] = ""
+
+    courses = courses[CATALOG_COLUMNS].copy()
     courses["Rating"] = pd.to_numeric(courses["Rating"], errors="coerce")
-    courses = courses.dropna(subset=["Course Name", "Tags", "Rating"])
+    courses["Rating"] = courses["Rating"].fillna(0.0)
+    courses = courses.dropna(subset=["Course Name", "Tags", "Course URL"])
 
     text_columns = [
         "Course Name",
@@ -436,16 +598,28 @@ def load_courses() -> pd.DataFrame:
         "Course Description",
         "Skills",
         "Tags",
+        "Provider",
+        "Category",
+        "Course Key",
+        "Last Verified",
     ]
     for column in text_columns:
         courses[column] = courses[column].fillna("").astype(str).str.strip()
 
+    courses["Provider"] = courses["Provider"].replace("", "Coursera")
+    courses["Category"] = courses["Category"].replace("", "Coursera")
     courses = courses.reset_index(drop=True)
+    empty_keys = courses["Course Key"] == ""
+    courses.loc[empty_keys, "Course Key"] = courses[empty_keys].apply(course_key_from_row, axis=1)
     courses["Skill Tokens"] = courses["Skills"].apply(parse_skills)
     courses["Search Text"] = (
         courses["Course Name"]
         + " "
         + courses["University"]
+        + " "
+        + courses["Provider"]
+        + " "
+        + courses["Category"]
         + " "
         + courses["Difficulty Level"]
         + " "
@@ -457,19 +631,44 @@ def load_courses() -> pd.DataFrame:
     return courses
 
 
-@st.cache_resource(show_spinner="Building recommendation index...")
-def build_vector_index(course_names: tuple[str, ...], tags: tuple[str, ...]):
-    vectorizer = CountVectorizer(max_features=MAX_FEATURES, stop_words="english")
-    vectors = vectorizer.fit_transform(tags)
-    course_index = {name: index for index, name in enumerate(course_names)}
-    return vectors, course_index
+@st.cache_resource(show_spinner="Loading recommendation index...")
+def load_recommendation_resources(
+    course_keys: tuple[str, ...],
+    search_texts: tuple[str, ...],
+    index_mtime: float,
+):
+    key_list = list(course_keys)
+    if INDEX_PATH.exists():
+        index_data = load(INDEX_PATH)
+        if index_data.get("course_keys") == key_list:
+            index_data["mode"] = "precomputed"
+            index_data["key_to_position"] = {key: index for index, key in enumerate(key_list)}
+            return index_data
+
+    vectorizer = TfidfVectorizer(
+        max_features=MAX_FEATURES,
+        stop_words="english",
+        ngram_range=(1, 2),
+    )
+    vectors = vectorizer.fit_transform(search_texts)
+    return {
+        "mode": "runtime",
+        "course_keys": key_list,
+        "key_to_position": {key: index for index, key in enumerate(key_list)},
+        "vectorizer": vectorizer,
+        "vectors": vectors,
+    }
 
 
 @st.cache_data(show_spinner=False)
 def top_skill_options(skill_rows: tuple[tuple[str, ...], ...], limit: int = 18) -> list[str]:
     counter: Counter[str] = Counter()
     for skills in skill_rows:
-        counter.update(skills)
+        counter.update(
+            skill
+            for skill in skills
+            if skill not in SMART_FILTER_STOPWORDS and (len(skill) > 2 or skill in {"ai", "ml", "ui", "ux"})
+        )
     return [skill for skill, _ in counter.most_common(limit)]
 
 
@@ -477,7 +676,18 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("shortlist", [])
     st.session_state.setdefault("recommendations", None)
     st.session_state.setdefault("recommendation_context", None)
+    st.session_state.setdefault("advisor_recommendations", None)
+    st.session_state.setdefault("advisor_context", None)
     st.session_state.setdefault("pending_toast", None)
+    st.session_state.setdefault(
+        "advisor_messages",
+        [
+            {
+                "role": "assistant",
+                "content": "Tell me your background, goal, and constraints. I will recommend courses from the catalog.",
+            }
+        ],
+    )
 
 
 def show_pending_toast() -> None:
@@ -489,13 +699,17 @@ def show_pending_toast() -> None:
 def reset_filters() -> None:
     for key in (
         "catalog_search",
+        "course_provider",
         "difficulty_level",
         "university",
         "rating_sort",
         "selected_skills",
+        "advisor_prompt",
         "course_name",
         "recommendations",
         "recommendation_context",
+        "advisor_recommendations",
+        "advisor_context",
     ):
         st.session_state.pop(key, None)
 
@@ -524,9 +738,348 @@ def difficulty_options(courses: pd.DataFrame) -> list[str]:
     return [ALL_OPTION, *ordered]
 
 
+def smart_filter_provider(request_text: str, providers: list[str]) -> str:
+    aliases = {
+        "Coursera": ("coursera",),
+        "FutureLearn": ("future learn", "futurelearn"),
+        "Kaggle Learn": ("kaggle", "kaggle learn"),
+        "MIT OpenCourseWare": ("mit", "ocw", "open courseware", "opencourseware"),
+        "Microsoft Learn": ("microsoft", "microsoft learn", "ms learn", "azure"),
+    }
+    available = set(providers)
+    for provider, provider_aliases in aliases.items():
+        if provider in available and any(phrase_in_text(alias, request_text) for alias in provider_aliases):
+            return provider
+
+    matches = [
+        provider
+        for provider in providers
+        if provider != ALL_OPTION and phrase_in_text(normalize_phrase(provider), request_text)
+    ]
+    return max(matches, key=len) if matches else ALL_OPTION
+
+
+def smart_filter_difficulty(request_text: str, difficulties: list[str]) -> str:
+    difficulty_aliases = (
+        ("Beginner", ("beginner", "basic", "foundation", "foundational", "intro", "introductory", "starter")),
+        ("Intermediate", ("intermediate", "mid level", "practical")),
+        ("Advanced", ("advanced", "expert", "deep", "senior")),
+        ("Mixed_Difficulty", ("mixed difficulty", "mixed")),
+    )
+    available = set(difficulties)
+    for difficulty, aliases in difficulty_aliases:
+        if difficulty in available and any(phrase_in_text(alias, request_text) for alias in aliases):
+            return difficulty
+    return ALL_OPTION
+
+
+def smart_filter_university(request_text: str, courses: pd.DataFrame) -> str:
+    matches: list[str] = []
+    for university in courses["University"].dropna().unique():
+        normalized = normalize_phrase(university)
+        if len(normalized) >= 4 and phrase_in_text(normalized, request_text):
+            matches.append(str(university))
+    return max(matches, key=len) if matches else ALL_OPTION
+
+
+def smart_filter_skills(request_text: str, courses: pd.DataFrame, limit: int = 8) -> list[str]:
+    skill_counter: Counter[str] = Counter()
+    for skills in courses["Skill Tokens"]:
+        skill_counter.update(skills)
+
+    matches: list[str] = []
+    for skill, _ in skill_counter.most_common(240):
+        normalized = normalize_phrase(format_skill_label(skill))
+        if normalized in SMART_FILTER_STOPWORDS:
+            continue
+        if len(normalized) <= 2 and normalized not in {"ai", "ml", "ui", "ux"}:
+            continue
+        if phrase_in_text(normalized, request_text):
+            matches.append(skill)
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def smart_filter_search_terms(
+    request: str,
+    provider: str,
+    difficulty_level: str,
+    university: str,
+    selected_skills: Iterable[str],
+) -> str:
+    tokens = re.findall(r"[a-z0-9+#.]+", request.lower())
+    blocked = set(SMART_FILTER_STOPWORDS)
+    for value in (provider, difficulty_level, university, *selected_skills):
+        if value != ALL_OPTION:
+            blocked.update(normalize_phrase(value).split())
+
+    retained = [
+        token
+        for token in tokens
+        if token not in blocked and len(token) > 1
+    ]
+    return " ".join(dict.fromkeys(retained))
+
+
+def interpret_smart_filter(courses: pd.DataFrame, request: str) -> dict[str, object]:
+    request_text = normalize_phrase(request)
+    providers = options_from(courses["Provider"])
+    difficulties = difficulty_options(courses)
+    provider = smart_filter_provider(request_text, providers)
+    difficulty_level = smart_filter_difficulty(request_text, difficulties)
+
+    scoped = apply_filters(
+        courses,
+        "",
+        provider,
+        difficulty_level,
+        ALL_OPTION,
+        [],
+    )
+    university = smart_filter_university(request_text, scoped if not scoped.empty else courses)
+    selected_skills = smart_filter_skills(request_text, scoped if not scoped.empty else courses)
+    search_query = smart_filter_search_terms(
+        request,
+        provider,
+        difficulty_level,
+        university,
+        selected_skills,
+    )
+
+    return {
+        "search_query": search_query,
+        "provider": provider,
+        "difficulty_level": difficulty_level,
+        "university": university,
+        "selected_skills": selected_skills,
+    }
+
+
+def apply_smart_filter(courses: pd.DataFrame, request: str) -> str:
+    lowered = normalize_phrase(request)
+    if any(phrase_in_text(word, lowered) for word in ("clear", "reset", "start over")):
+        for key in (
+            "catalog_search",
+            "course_provider",
+            "difficulty_level",
+            "university",
+            "rating_sort",
+            "selected_skills",
+            "course_name",
+            "recommendations",
+            "recommendation_context",
+        ):
+            st.session_state.pop(key, None)
+        return "Cleared the active filters."
+
+    result = interpret_smart_filter(courses, request)
+    st.session_state["catalog_search"] = result["search_query"]
+    st.session_state["course_provider"] = result["provider"]
+    st.session_state["difficulty_level"] = result["difficulty_level"]
+    st.session_state["university"] = result["university"]
+    st.session_state["selected_skills"] = list(result["selected_skills"])
+    st.session_state.pop("recommendations", None)
+    st.session_state.pop("recommendation_context", None)
+
+    summary_parts: list[str] = []
+    if result["provider"] != ALL_OPTION:
+        summary_parts.append(f"provider {result['provider']}")
+    if result["difficulty_level"] != ALL_OPTION:
+        summary_parts.append(f"difficulty {result['difficulty_level']}")
+    if result["university"] != ALL_OPTION:
+        summary_parts.append(f"organization {result['university']}")
+    if result["selected_skills"]:
+        labels = ", ".join(format_skill_label(skill) for skill in result["selected_skills"])
+        summary_parts.append(f"skills {labels}")
+    if result["search_query"]:
+        summary_parts.append(f"search {result['search_query']}")
+
+    if not summary_parts:
+        st.session_state["catalog_search"] = request.strip()
+        return "I used your full request as the catalog search."
+    return "Applied " + "; ".join(summary_parts) + "."
+
+
+def expand_goal_text(goal: str) -> str:
+    normalized = normalize_phrase(goal)
+    expansions: list[str] = []
+    if any(phrase_in_text(term, normalized) for term in ("data analyst", "analytics", "business analyst")):
+        expansions.append("data analysis analytics sql python statistics visualization dashboard business intelligence")
+    if any(phrase_in_text(term, normalized) for term in ("software engineer", "developer", "programmer")):
+        expansions.append("software engineering programming algorithms data structures python java git github")
+    if any(phrase_in_text(term, normalized) for term in ("cloud", "azure", "devops", "kubernetes")):
+        expansions.append("cloud azure devops kubernetes infrastructure deployment containers security")
+    if any(phrase_in_text(term, normalized) for term in ("web developer", "frontend", "front end", "backend", "back end", "full stack", "fullstack")):
+        expansions.append("web development frontend backend full stack javascript html css react api application development")
+    if any(phrase_in_text(term, normalized) for term in ("cyber", "security", "secure")):
+        expansions.append("cybersecurity security network risk identity protection threat")
+    if any(phrase_in_text(term, normalized) for term in ("ai", "ml", "machine learning", "deep learning", "generative", "gen ai", "genai")):
+        expansions.append("artificial intelligence generative ai genai large language models llm prompt engineering azure openai machine learning deep learning neural networks python")
+    if any(phrase_in_text(term, normalized) for term in ("finance", "financial", "banking")):
+        expansions.append("finance financial risk accounting investment fintech")
+    if any(phrase_in_text(term, normalized) for term in ("healthcare", "health", "medical")):
+        expansions.append("healthcare health medical clinical public health")
+    if any(phrase_in_text(term, normalized) for term in ("project manager", "product manager", "management", "leadership")):
+        expansions.append("project management product management leadership agile scrum strategy communication")
+    if any(phrase_in_text(term, normalized) for term in ("database", "sql", "data engineer", "data engineering")):
+        expansions.append("database sql data engineering pipelines data warehouse postgresql mysql big data")
+    if any(phrase_in_text(term, normalized) for term in ("career switch", "switch career", "job ready", "job-ready")):
+        expansions.append("beginner professional certificate career skills hands on project portfolio")
+    if any(phrase_in_text(term, normalized) for term in ("beginner", "new", "start", "foundation")):
+        expansions.append("beginner introductory foundations fundamentals")
+    if any(phrase_in_text(term, normalized) for term in ("advanced", "expert", "senior")):
+        expansions.append("advanced expert architecture optimization")
+    return " ".join([goal, *expansions]).strip()
+
+
+def advisor_query_text(messages: list[dict[str, str]], request: str) -> str:
+    previous_user_context = [
+        str(message.get("content", ""))
+        for message in messages[-6:]
+        if message.get("role") == "user"
+    ]
+    return expand_goal_text(" ".join([*previous_user_context, request]))
+
+
+def recommend_for_goal(
+    goal_text: str,
+    candidate_courses: pd.DataFrame,
+    recommendation_resources: dict,
+    limit: int = MAX_RECOMMENDATIONS,
+) -> pd.DataFrame:
+    if candidate_courses.empty or not goal_text.strip():
+        return pd.DataFrame()
+
+    key_to_position = recommendation_resources["key_to_position"]
+    candidate_pairs = [
+        (key, key_to_position[key])
+        for key in candidate_courses["Course Key"].astype(str)
+        if key in key_to_position
+    ]
+    if not candidate_pairs:
+        return pd.DataFrame()
+
+    candidate_keys = [key for key, _ in candidate_pairs]
+    candidate_positions = [position for _, position in candidate_pairs]
+    query_vector = recommendation_resources["vectorizer"].transform([goal_text])
+    similarities = cosine_similarity(
+        query_vector,
+        recommendation_resources["vectors"][candidate_positions],
+    ).ravel()
+
+    normalized_goal = normalize_phrase(goal_text)
+    genai_intent = any(
+        phrase_in_text(term, normalized_goal)
+        for term in ("gen ai", "genai", "generative ai", "llm", "large language", "prompt engineering", "openai")
+    )
+    genai_terms = (
+        "generative ai",
+        "generative artificial intelligence",
+        "large language",
+        "llm",
+        "prompt",
+        "openai",
+        "copilot",
+        "foundation model",
+        "transformer",
+    )
+    ai_gate_terms = (
+        "artificial intelligence",
+        "generative",
+        "machine learning",
+        "deep learning",
+        "neural",
+        "language model",
+        "prompt",
+        "openai",
+        "copilot",
+        "transformer",
+    )
+    candidate_meta = candidate_courses.set_index("Course Key")[
+        ["Search Text", "Difficulty Level", "Provider"]
+    ].to_dict("index")
+    text_by_key = {
+        key: str(meta.get("Search Text", ""))
+        for key, meta in candidate_meta.items()
+    }
+    similarity_by_key = {
+        key: min(float(score), 1.0)
+        for key, score in zip(candidate_keys, similarities)
+        if float(score) > 0
+    }
+
+    difficulty_intent = smart_filter_difficulty(
+        normalized_goal,
+        difficulty_options(candidate_courses),
+    )
+    provider_intent = smart_filter_provider(
+        normalized_goal,
+        options_from(candidate_courses["Provider"]),
+    )
+    if difficulty_intent != ALL_OPTION or provider_intent != ALL_OPTION:
+        adjusted_scores: dict[str, float] = {}
+        for key, score in similarity_by_key.items():
+            meta = candidate_meta.get(key, {})
+            if difficulty_intent != ALL_OPTION:
+                difficulty = str(meta.get("Difficulty Level", ""))
+                if difficulty == difficulty_intent:
+                    score += 0.12
+                elif difficulty == "Mixed_Difficulty":
+                    score += 0.03
+                else:
+                    score *= 0.82
+            if provider_intent != ALL_OPTION:
+                if str(meta.get("Provider", "")) == provider_intent:
+                    score += 0.09
+                else:
+                    score *= 0.9
+            adjusted_scores[key] = min(score, 1.0)
+        similarity_by_key = adjusted_scores
+
+    if genai_intent:
+        boosted_scores: dict[str, float] = {}
+        for key, score in similarity_by_key.items():
+            course_text = str(text_by_key.get(key, "")).lower()
+            if not any(term in course_text for term in ai_gate_terms):
+                continue
+            if any(term in course_text for term in genai_terms):
+                score += 0.18
+            else:
+                score += 0.035
+            boosted_scores[key] = min(score, 1.0)
+        similarity_by_key = boosted_scores
+
+    if not similarity_by_key:
+        return pd.DataFrame()
+
+    recommendations = candidate_courses[
+        candidate_courses["Course Key"].isin(similarity_by_key)
+    ].copy()
+    recommendations["Similarity"] = recommendations["Course Key"].map(similarity_by_key)
+    return recommendations.sort_values(
+        by=["Similarity", "Rating"],
+        ascending=[False, False],
+    ).head(limit)
+
+
+def advisor_reply(recommendations: pd.DataFrame, scoped_count: int) -> str:
+    if recommendations.empty:
+        return "I could not find a strong match in the current catalog scope. Try adding a role, skill, level, or remove some manual filters."
+
+    top = recommendations.iloc[0]
+    providers = ", ".join(recommendations["Provider"].dropna().astype(str).unique()[:3])
+    return (
+        f"I found {len(recommendations)} recommendations from {scoped_count:,} in-scope courses. "
+        f"Top match: {top['Course Name']} from {top['University']}. "
+        f"Provider mix: {providers}."
+    )
+
+
 def apply_filters(
     courses: pd.DataFrame,
     search_query: str,
+    provider: str,
     difficulty_level: str,
     university: str,
     selected_skills: Iterable[str],
@@ -537,6 +1090,9 @@ def apply_filters(
 
     if query:
         filtered = filtered[filtered["Search Text"].str.contains(query, regex=False)]
+
+    if provider != ALL_OPTION:
+        filtered = filtered[filtered["Provider"] == provider]
 
     if difficulty_level != ALL_OPTION:
         filtered = filtered[filtered["Difficulty Level"] == difficulty_level]
@@ -554,27 +1110,61 @@ def apply_filters(
 
 
 def recommend_courses(
-    course_name: str,
+    course_key: str,
     candidate_courses: pd.DataFrame,
-    vectors,
-    course_index: dict[str, int],
+    recommendation_resources: dict,
     limit: int = MAX_RECOMMENDATIONS,
 ) -> pd.DataFrame:
-    selected_index = course_index.get(course_name)
+    key_to_position = recommendation_resources["key_to_position"]
+    selected_index = key_to_position.get(course_key)
     if selected_index is None:
         return pd.DataFrame()
 
-    candidates = candidate_courses[candidate_courses["Course Name"] != course_name].copy()
+    candidates = candidate_courses[candidate_courses["Course Key"] != course_key].copy()
     if candidates.empty:
         return pd.DataFrame()
 
-    candidate_indexes = candidates.index.to_list()
-    similarities = cosine_similarity(
-        vectors[selected_index],
-        vectors[candidate_indexes],
-    ).ravel()
+    candidate_keys = set(candidates["Course Key"])
+    candidate_positions = [
+        key_to_position[key]
+        for key in candidate_keys
+        if key in key_to_position and key != course_key
+    ]
 
-    candidates["Similarity"] = similarities
+    if not candidate_positions:
+        return pd.DataFrame()
+
+    vectors = recommendation_resources["vectors"]
+    ranked_rows: list[tuple[str, float]] = []
+    if recommendation_resources.get("mode") == "precomputed":
+        neighbor_indices = recommendation_resources.get("neighbor_indices")
+        neighbor_similarities = recommendation_resources.get("neighbor_similarities")
+        course_keys = recommendation_resources["course_keys"]
+        for neighbor_index, similarity in zip(
+            neighbor_indices[selected_index],
+            neighbor_similarities[selected_index],
+        ):
+            neighbor_key = course_keys[int(neighbor_index)]
+            if neighbor_key == course_key or neighbor_key not in candidate_keys:
+                continue
+            ranked_rows.append((neighbor_key, float(similarity)))
+            if len(ranked_rows) >= limit:
+                break
+
+    if len(ranked_rows) < limit:
+        similarities = cosine_similarity(
+            vectors[selected_index],
+            vectors[candidate_positions],
+        ).ravel()
+        ranked_rows = [
+            (recommendation_resources["course_keys"][position], float(score))
+            for position, score in zip(candidate_positions, similarities)
+        ]
+
+    similarity_by_key = dict(ranked_rows)
+    candidates = candidates[candidates["Course Key"].isin(similarity_by_key)].copy()
+    candidates["Similarity"] = candidates["Course Key"].map(similarity_by_key)
+
     return candidates.sort_values(
         by=["Similarity", "Rating"],
         ascending=[False, False],
@@ -605,12 +1195,14 @@ def sort_recommendations(recommendations: pd.DataFrame, sort_order: str) -> pd.D
 
 def filter_key(
     search_query: str,
+    provider: str,
     difficulty_level: str,
     university: str,
     selected_skills: Iterable[str],
-) -> tuple[str, str, str, tuple[str, ...]]:
+) -> tuple[str, str, str, str, tuple[str, ...]]:
     return (
         search_query.strip().lower(),
+        provider,
         difficulty_level,
         university,
         tuple(sorted(selected_skills or ())),
@@ -676,7 +1268,7 @@ def render_course_card(
     key_prefix: str = "course",
 ) -> None:
     course_name = str(course["Course Name"])
-    course_key = str(course.name)
+    course_key = normalize_course_key(course.get("Course Key", course.name))
     saved = course_name in st.session_state.get("shortlist", [])
     similarity = course.get("Similarity", None)
     similarity_value = None
@@ -754,7 +1346,154 @@ def render_course_grid(
                 )
 
 
-def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]]:
+def render_smart_filter(courses: pd.DataFrame) -> None:
+    st.sidebar.markdown("### Smart filter")
+    for message in st.session_state.get("smart_filter_messages", [])[-3:]:
+        role = "user" if message.get("role") == "user" else "assistant"
+        st.sidebar.markdown(
+            f'<div class="vrl-chat-bubble vrl-chat-{role}">{escape(str(message.get("content", "")))}</div>',
+            unsafe_allow_html=True,
+        )
+
+    request = st.sidebar.text_input(
+        "Ask smart filter",
+        placeholder="Beginner Azure security from Microsoft",
+        key="smart_filter_prompt",
+    )
+    submitted = st.sidebar.button("Apply smart filter", width="stretch")
+
+    if submitted and request.strip():
+        reply = apply_smart_filter(courses, request.strip())
+        st.session_state["smart_filter_messages"] = [
+            *st.session_state.get("smart_filter_messages", [])[-4:],
+            {"role": "user", "content": request.strip()},
+            {"role": "assistant", "content": reply},
+        ]
+        st.rerun()
+
+
+def submit_advisor_request(
+    request: str,
+    filtered_courses: pd.DataFrame,
+    recommendation_resources: dict,
+    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
+    rating_sort: str,
+) -> None:
+    query_text = advisor_query_text(
+        st.session_state.get("advisor_messages", []),
+        request.strip(),
+    )
+    with st.status("Searching the course catalog", expanded=False) as status:
+        status.write("Reading your goal")
+        recommendations = recommend_for_goal(
+            query_text,
+            filtered_courses,
+            recommendation_resources,
+            limit=MAX_RECOMMENDATIONS,
+        )
+        status.write("Ranking best-fit courses")
+        recommendations = sort_recommendations(recommendations, rating_sort)
+        reply = advisor_reply(recommendations, len(filtered_courses))
+        status.update(label="Recommendations ready", state="complete", expanded=False)
+
+    st.session_state["advisor_recommendations"] = recommendations
+    st.session_state["advisor_context"] = active_filter_key
+    st.session_state["advisor_messages"] = [
+        *st.session_state.get("advisor_messages", [])[-6:],
+        {"role": "user", "content": request.strip()},
+        {"role": "assistant", "content": reply},
+    ]
+    st.session_state["pending_toast"] = "Recommendations ready"
+    st.rerun()
+
+
+def render_advisor_chat(
+    filtered_courses: pd.DataFrame,
+    recommendation_resources: dict,
+    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
+    rating_sort: str,
+) -> None:
+    st.markdown(
+        """
+        <div class="vrl-advisor-head">
+            <div class="vrl-bot-avatar">AI</div>
+            <div>
+                <p class="vrl-advisor-name">Course Advisor</p>
+                <p class="vrl-advisor-status">Searching the catalog locally</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    quick_prompts = [
+        ("Gen AI", "I am looking for Gen AI courses"),
+        ("Cybersecurity", "Beginner cybersecurity courses"),
+        ("Data analyst", "Python data analyst SQL dashboard courses"),
+        ("Cloud DevOps", "Cloud DevOps Azure courses"),
+    ]
+    quick_cols = st.columns(4)
+    quick_request = ""
+    for index, (label, prompt) in enumerate(quick_prompts):
+        with quick_cols[index]:
+            if st.button(label, key=f"advisor_quick_{index}", width="stretch"):
+                quick_request = prompt
+
+    clear_advisor = st.button("Clear conversation", width="content")
+
+    if clear_advisor:
+        st.session_state["advisor_messages"] = [
+            {
+                "role": "assistant",
+                "content": "Tell me your background, goal, and constraints. I will recommend courses from the catalog.",
+            }
+        ]
+        st.session_state["advisor_recommendations"] = None
+        st.session_state["advisor_context"] = None
+        st.rerun()
+
+    if quick_request:
+        submit_advisor_request(
+            quick_request,
+            filtered_courses,
+            recommendation_resources,
+            active_filter_key,
+            rating_sort,
+        )
+
+    for message in st.session_state.get("advisor_messages", [])[-6:]:
+        role = "user" if message.get("role") == "user" else "assistant"
+        avatar = "user" if role == "user" else "assistant"
+        with st.chat_message(role, avatar=avatar):
+            st.write(str(message.get("content", "")))
+
+    advisor_recommendations = st.session_state.get("advisor_recommendations")
+    advisor_context = st.session_state.get("advisor_context")
+    if advisor_recommendations is not None:
+        if advisor_context != active_filter_key:
+            st.info("Manual filters changed after the last advisor answer. Ask again to refresh these recommendations.")
+        else:
+            render_course_grid(
+                advisor_recommendations,
+                show_similarity=True,
+                key_prefix="advisor",
+            )
+
+    chat_request = st.chat_input(
+        "Tell me what you want to learn",
+        key="advisor_chat_input",
+    )
+    if chat_request and str(chat_request).strip():
+        submit_advisor_request(
+            str(chat_request).strip(),
+            filtered_courses,
+            recommendation_resources,
+            active_filter_key,
+            rating_sort,
+        )
+
+
+def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list[str]]:
     logo_uri = logo_data_uri()
     if logo_uri:
         st.sidebar.markdown(
@@ -773,6 +1512,15 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]
         key="catalog_search",
     )
 
+    providers = options_from(courses["Provider"])
+    if st.session_state.get("course_provider") not in providers:
+        st.session_state["course_provider"] = ALL_OPTION
+    provider = st.sidebar.selectbox(
+        "Course provider",
+        providers,
+        key="course_provider",
+    )
+
     difficulties = difficulty_options(courses)
     if st.session_state.get("difficulty_level") not in difficulties:
         st.session_state["difficulty_level"] = ALL_OPTION
@@ -786,6 +1534,7 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]
     university_base = apply_filters(
         courses,
         search_query,
+        provider,
         difficulty_level,
         ALL_OPTION,
         st.session_state.get("selected_skills", []),
@@ -808,10 +1557,15 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]
         key="rating_sort",
     )
 
-    skill_options = top_skill_options(tuple(courses["Skill Tokens"]))
+    base_skill_options = top_skill_options(tuple(courses["Skill Tokens"]))
+    stored_skills = list(st.session_state.get("selected_skills", []))
+    skill_options = [
+        *base_skill_options,
+        *[skill for skill in stored_skills if skill not in base_skill_options],
+    ]
     selected_skills = [
         skill
-        for skill in st.session_state.get("selected_skills", [])
+        for skill in stored_skills
         if skill in skill_options
     ]
     if st.session_state.get("selected_skills") != selected_skills:
@@ -833,19 +1587,29 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, list[str]
         on_click=reset_filters,
     )
 
-    return search_query, difficulty_level, university, rating_sort, selected_skills
+    return search_query, provider, difficulty_level, university, rating_sort, selected_skills
 
 
 def render_recommend_tab(
     filtered_courses: pd.DataFrame,
-    vectors,
-    course_index: dict[str, int],
-    active_filter_key: tuple[str, str, str, tuple[str, ...]],
+    recommendation_resources: dict,
+    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
-    st.markdown('<div class="vrl-section-title">Recommendations</div>', unsafe_allow_html=True)
+    render_advisor_chat(
+        filtered_courses,
+        recommendation_resources,
+        active_filter_key,
+        rating_sort,
+    )
 
-    course_options = filtered_courses["Course Name"].sort_values().to_list()
+    st.divider()
+    st.markdown('<div class="vrl-section-title">Course similarity</div>', unsafe_allow_html=True)
+
+    course_label_map = filtered_courses.set_index("Course Key")["Course Name"].to_dict()
+    course_options = (
+        filtered_courses.sort_values("Course Name")["Course Key"].astype(str).to_list()
+    )
     if not course_options:
         st.warning("No courses match the selected filters.")
         return
@@ -856,6 +1620,7 @@ def render_recommend_tab(
     selected_course = st.selectbox(
         "Completed, liked, or target course",
         course_options,
+        format_func=lambda key: course_label_map.get(key, key),
         key="course_name",
     )
 
@@ -882,8 +1647,7 @@ def render_recommend_tab(
                 recommendations = recommend_courses(
                     selected_course,
                     filtered_courses,
-                    vectors,
-                    course_index,
+                    recommendation_resources,
                 )
             st.session_state["recommendations"] = recommendations
             st.session_state["recommendation_context"] = active_context
@@ -1010,14 +1774,16 @@ def main() -> None:
     ensure_session_state()
     show_pending_toast()
 
-    courses = load_courses()
-    vectors, course_index = build_vector_index(
-        tuple(courses["Course Name"]),
-        tuple(courses["Tags"]),
+    courses = load_courses(file_mtime(DATA_PATH))
+    recommendation_resources = load_recommendation_resources(
+        tuple(courses["Course Key"]),
+        tuple(courses["Search Text"]),
+        file_mtime(INDEX_PATH),
     )
 
     (
         search_query,
+        provider,
         difficulty_level,
         university,
         rating_sort,
@@ -1027,12 +1793,14 @@ def main() -> None:
     filtered_courses = apply_filters(
         courses,
         search_query,
+        provider,
         difficulty_level,
         university,
         selected_skills,
     )
     active_filter_key = filter_key(
         search_query,
+        provider,
         difficulty_level,
         university,
         selected_skills,
@@ -1052,8 +1820,7 @@ def main() -> None:
     with recommend_tab:
         render_recommend_tab(
             filtered_courses,
-            vectors,
-            course_index,
+            recommendation_resources,
             active_filter_key,
             rating_sort,
         )

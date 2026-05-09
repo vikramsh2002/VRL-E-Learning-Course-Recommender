@@ -1,0 +1,16 @@
+{
+  "baseline_records": 4356,
+  "published_records": 4356,
+  "new_records_added": 0,
+  "quarantined_new_records": 0,
+  "retained_unverified_existing_records": 0,
+  "providers": {
+    "Coursera": 3029,
+    "Microsoft Learn": 694,
+    "FutureLearn": 386,
+    "MIT OpenCourseWare": 230,
+    "Kaggle Learn": 17
+  },
+  "index_path": "artifacts\\recommendation_index.joblib",
+  "data_path": "CourseDetails.csv"
+}
