@@ -1521,16 +1521,17 @@ def render_advisor_roadmap(recommendations: pd.DataFrame) -> None:
 
     cards = []
     for row in roadmap_rows[:3]:
-        stage = str(row.get("Roadmap Stage", "Build"))
-        label = stage_copy.get(stage, "Recommended")
+        stage = escape(str(row.get("Roadmap Stage", "Build")))
+        label = escape(stage_copy.get(str(row.get("Roadmap Stage", "Build")), "Recommended"))
+        title = escape(str(row.get("Course Name", "")))
+        provider = escape(str(row.get("Provider", "")))
+        difficulty = escape(str(row.get("Difficulty Level", "")))
         cards.append(
-            f"""
-            <div class="vrl-roadmap-step">
-                <div class="vrl-roadmap-label">{escape(label)} | {escape(stage)}</div>
-                <div class="vrl-roadmap-title">{escape(str(row.get("Course Name", "")))}</div>
-                <div class="vrl-meta">{escape(str(row.get("Provider", "")))} | {escape(str(row.get("Difficulty Level", "")))}</div>
-            </div>
-            """
+            '<div class="vrl-roadmap-step">'
+            f'<div class="vrl-roadmap-label">{label} | {stage}</div>'
+            f'<div class="vrl-roadmap-title">{title}</div>'
+            f'<div class="vrl-meta">{provider} | {difficulty}</div>'
+            "</div>"
         )
 
     st.markdown('<div class="vrl-section-title">Suggested learning roadmap</div>', unsafe_allow_html=True)
