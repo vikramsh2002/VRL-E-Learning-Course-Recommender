@@ -4,6 +4,7 @@ from html import escape
 from pathlib import Path
 import re
 from typing import Iterable
+from urllib.parse import quote_plus
 
 import pandas as pd
 import streamlit as st
@@ -84,7 +85,7 @@ CATALOG_COLUMNS = [
 
 
 st.set_page_config(
-    page_title="VRL Course Recommender",
+    page_title="VRL Learning Navigator",
     page_icon=str(LOGO_PATH),
     layout="wide",
 )
@@ -724,13 +725,15 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("recommendation_context", None)
     st.session_state.setdefault("advisor_recommendations", None)
     st.session_state.setdefault("advisor_context", None)
+    st.session_state.setdefault("advisor_query_text", "")
+    st.session_state.setdefault("advisor_user_goal", "")
     st.session_state.setdefault("pending_toast", None)
     st.session_state.setdefault(
         "advisor_messages",
         [
             {
                 "role": "assistant",
-                "content": "Tell me your background, goal, and constraints. I will recommend courses from the catalog.",
+                "content": "Tell me your goal. I will build a learning bundle from the catalog.",
             }
         ],
     )
@@ -756,6 +759,8 @@ def reset_filters() -> None:
         "recommendation_context",
         "advisor_recommendations",
         "advisor_context",
+        "advisor_query_text",
+        "advisor_user_goal",
     ):
         st.session_state.pop(key, None)
 
@@ -1345,13 +1350,13 @@ def render_header() -> None:
             <div class="vrl-header-content">
                 <div class="vrl-header-copy">
                     <p class="vrl-eyebrow">Learning Intelligence</p>
-                    <p class="vrl-title">VRL Course Recommender</p>
-                    <p class="vrl-subtitle">Find a stronger next course from the catalog in view.</p>
+                    <p class="vrl-title">VRL Learning Navigator</p>
+                    <p class="vrl-subtitle">Goal-based course paths, practice prompts, and knowledge checks.</p>
                 </div>
                 <div class="vrl-header-pills" aria-label="Recommendation context">
                     <span class="vrl-header-pill">Catalog</span>
-                    <span class="vrl-header-pill">Skill Match</span>
-                    <span class="vrl-header-pill">Ratings</span>
+                    <span class="vrl-header-pill">Roadmap</span>
+                    <span class="vrl-header-pill">Practice</span>
                 </div>
             </div>
         </section>
@@ -1484,10 +1489,120 @@ def render_course_grid(
                 )
 
 
-def render_advisor_roadmap(recommendations: pd.DataFrame) -> None:
+LEARNING_BUNDLES = {
+    "genai": {
+        "label": "Generative AI",
+        "practice": [
+            ("Prompt comparison lab", "Write two prompts for the same task, compare output quality, and note which instruction improved accuracy."),
+            ("Document summarizer", "Pick a public article, design a summary prompt, then add a checklist for hallucination checks."),
+            ("Mini assistant brief", "Define a narrow assistant persona, required inputs, refusal boundaries, and a success metric."),
+        ],
+        "mcqs": [
+            ("Which signal most strongly indicates an LLM hallucination risk?", ["A source-backed answer", "A confident answer without evidence", "A short answer", "A rewritten answer"], 1),
+            ("Prompt engineering usually improves outputs by making what clearer?", ["The model weights", "The user interface color", "Task, context, constraints, and format", "The internet speed"], 2),
+            ("Why are evaluation examples useful for GenAI systems?", ["They replace all testing", "They show whether outputs meet expected behavior", "They remove the need for prompts", "They make models private"], 1),
+        ],
+        "resource_query": "generative AI prompt engineering large language models",
+    },
+    "data": {
+        "label": "Data Science",
+        "practice": [
+            ("EDA notebook", "Choose a CSV, profile missing values, create three charts, and write five findings."),
+            ("SQL insight drill", "Write queries for filtering, grouping, joins, and ranking on one dataset."),
+            ("Dashboard brief", "Turn one business question into metrics, visuals, and a recommendation."),
+        ],
+        "mcqs": [
+            ("What is the main goal of exploratory data analysis?", ["Deploy a model", "Understand patterns and data quality", "Encrypt the dataset", "Write production APIs"], 1),
+            ("Which metric is best for a heavily imbalanced classification dataset?", ["Accuracy only", "Precision/recall or F1", "File size", "Column count"], 1),
+            ("Why split data into train and test sets?", ["To make charts prettier", "To estimate performance on unseen data", "To delete outliers", "To speed up typing"], 1),
+        ],
+        "resource_query": "data science python sql dashboard analytics",
+    },
+    "cybersecurity": {
+        "label": "Cybersecurity",
+        "practice": [
+            ("Threat model", "Pick a simple app and list assets, entry points, threats, and mitigations."),
+            ("Security checklist", "Create checks for password policy, logging, access control, and patching."),
+            ("Incident response drill", "Write a short response plan for a suspicious login event."),
+        ],
+        "mcqs": [
+            ("What does least privilege mean?", ["Give users admin access", "Give only required access", "Disable logs", "Use one shared account"], 1),
+            ("Which control helps detect suspicious activity?", ["Audit logging", "Bigger fonts", "Unused accounts", "Plain text passwords"], 0),
+            ("Why is patching important?", ["It improves monitor brightness", "It fixes known vulnerabilities", "It removes backups", "It avoids authentication"], 1),
+        ],
+        "resource_query": "cybersecurity fundamentals threat modeling incident response",
+    },
+    "cloud": {
+        "label": "Cloud DevOps",
+        "practice": [
+            ("Deployment map", "Draw source control, build, test, deploy, monitoring, and rollback steps for one app."),
+            ("Pipeline checklist", "Define checks for tests, secrets, approvals, artifacts, and release notes."),
+            ("Cloud cost review", "Estimate compute, storage, and network drivers for a small service."),
+        ],
+        "mcqs": [
+            ("What is a CI/CD pipeline for?", ["Manual copy-paste releases", "Automating build, test, and deployment", "Writing invoices", "Replacing source control"], 1),
+            ("Why keep secrets out of code?", ["They slow tests", "They can leak credentials", "They reduce comments", "They break CSS"], 1),
+            ("What does rollback support?", ["Recovering from bad releases", "Increasing logo size", "Deleting monitoring", "Skipping tests"], 0),
+        ],
+        "resource_query": "cloud devops azure ci cd kubernetes",
+    },
+    "general": {
+        "label": "Learning Path",
+        "practice": [
+            ("Concept map", "Write the top ten terms in this topic and connect each term to one practical use."),
+            ("Mini project", "Build or outline a small project that applies the first two courses."),
+            ("Portfolio note", "Summarize what you learned, what you built, and what you would improve next."),
+        ],
+        "mcqs": [
+            ("What makes a learning goal useful?", ["It is vague", "It has a skill, context, and outcome", "It avoids practice", "It has no deadline"], 1),
+            ("Why do small projects help learning?", ["They replace all theory", "They force applied recall", "They hide mistakes", "They remove feedback"], 1),
+            ("What should you do after completing a course?", ["Never revisit it", "Apply, review, and document the skill", "Delete notes", "Avoid examples"], 1),
+        ],
+        "resource_query": "online learning practical project skills",
+    },
+}
+
+
+def infer_bundle_domain(query_text: str, recommendations: pd.DataFrame) -> str:
+    combined = normalize_phrase(query_text)
+    if not recommendations.empty:
+        combined = normalize_phrase(
+            combined
+            + " "
+            + " ".join(recommendations.head(5)["Search Text"].fillna("").astype(str))
+        )
+
+    domain_terms = (
+        ("genai", ("gen ai", "genai", "generative", "large language", "llm", "prompt", "openai", "copilot")),
+        ("data", ("data science", "data analyst", "analytics", "dashboard", "sql", "statistics", "machine learning")),
+        ("cybersecurity", ("cyber", "security", "threat", "incident", "vulnerability", "privacy")),
+        ("cloud", ("cloud", "devops", "azure", "kubernetes", "pipeline", "deployment")),
+    )
+    for domain, terms in domain_terms:
+        if any(phrase_in_text(term, combined) for term in terms):
+            return domain
+    return "general"
+
+
+def bundle_resource_links(query_text: str, bundle: dict[str, object]) -> list[tuple[str, str]]:
+    base_query = str(bundle.get("resource_query") or query_text or "online learning")
+    encoded = quote_plus(base_query)
+    return [
+        ("Medium", f"https://medium.com/search?q={encoded}"),
+        ("YouTube", f"https://www.youtube.com/results?search_query={encoded}"),
+        ("Google Scholar", f"https://scholar.google.com/scholar?q={encoded}"),
+        ("GitHub", f"https://github.com/search?q={encoded}&type=repositories"),
+        ("Kaggle", f"https://www.kaggle.com/search?q={encoded}"),
+        ("Microsoft Learn", f"https://learn.microsoft.com/en-us/search/?terms={encoded}"),
+    ]
+
+
+def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") -> None:
     if recommendations.empty or "Roadmap Stage" not in recommendations.columns:
         return
 
+    domain = infer_bundle_domain(query_text, recommendations)
+    bundle = LEARNING_BUNDLES.get(domain, LEARNING_BUNDLES["general"])
     stage_order = ["Foundation", "Build", "Specialize"]
     stage_copy = {
         "Foundation": "Start here",
@@ -1519,23 +1634,149 @@ def render_advisor_roadmap(recommendations: pd.DataFrame) -> None:
     if not roadmap_rows:
         return
 
-    cards = []
-    for row in roadmap_rows[:3]:
-        stage = escape(str(row.get("Roadmap Stage", "Build")))
-        label = escape(stage_copy.get(str(row.get("Roadmap Stage", "Build")), "Recommended"))
-        title = escape(str(row.get("Course Name", "")))
-        provider = escape(str(row.get("Provider", "")))
-        difficulty = escape(str(row.get("Difficulty Level", "")))
-        cards.append(
-            '<div class="vrl-roadmap-step">'
-            f'<div class="vrl-roadmap-label">{label} | {stage}</div>'
-            f'<div class="vrl-roadmap-title">{title}</div>'
-            f'<div class="vrl-meta">{provider} | {difficulty}</div>'
-            "</div>"
-        )
+    roadmap_rows = roadmap_rows[:3]
+    st.markdown(
+        f'<div class="vrl-section-title">{escape(str(bundle["label"]))} learning bundle</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="vrl-small-note">Courses, practice, self-check, and external resources in one compact path.</div>',
+        unsafe_allow_html=True,
+    )
 
-    st.markdown('<div class="vrl-section-title">Suggested learning roadmap</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="vrl-roadmap">{"".join(cards)}</div>', unsafe_allow_html=True)
+    start_tab, practice_tab, deeper_tab, resources_tab = st.tabs(
+        ["Start here", "Practice next", "Go deeper", "Resources"]
+    )
+
+    with start_tab:
+        step_options = list(range(len(roadmap_rows)))
+        roadmap_key = "advisor_roadmap_step"
+        if st.session_state.get(roadmap_key) not in step_options:
+            st.session_state[roadmap_key] = 0
+
+        selected_step = st.pills(
+            "Roadmap steps",
+            step_options,
+            format_func=lambda index: f"{index + 1}. {stage_copy.get(str(roadmap_rows[index].get('Roadmap Stage', 'Build')), 'Recommended')}",
+            key=roadmap_key,
+            label_visibility="collapsed",
+            width="stretch",
+        )
+        selected_step = 0 if selected_step is None else int(selected_step)
+
+        columns = st.columns(len(roadmap_rows))
+        for index, row in enumerate(roadmap_rows):
+            stage = str(row.get("Roadmap Stage", "Build"))
+            label = stage_copy.get(stage, "Recommended")
+            course_key = normalize_course_key(row.get("Course Key", row.name))
+            similarity = row.get("Similarity", 0.0)
+            similarity_value = min(max(float(similarity), 0.0), 1.0) if pd.notna(similarity) else 0.0
+            with columns[index]:
+                with st.container(border=True):
+                    st.markdown(f"**{index + 1}. {label}**")
+                    st.markdown(f"##### {str(row.get('Course Name', ''))}")
+                    st.caption(f"{row.get('Provider', '')} | {row.get('Difficulty Level', '')}")
+                    st.progress(similarity_value, text=f"{similarity_value:.0%} match")
+                    st.link_button(
+                        "Open",
+                        str(row.get("Course URL", "")),
+                        width="stretch",
+                        key=f"roadmap_open_{course_key}_{index}",
+                    )
+
+        selected_row = roadmap_rows[selected_step]
+        selected_course_key = normalize_course_key(selected_row.get("Course Key", selected_row.name))
+        st.markdown("##### Current step")
+        with st.container(border=True):
+            left_col, right_col = st.columns([0.68, 0.32], vertical_alignment="center")
+            with left_col:
+                st.markdown(f"### {selected_step + 1}. {str(selected_row.get('Course Name', ''))}")
+                st.caption(
+                    f"{selected_row.get('Provider', '')} | "
+                    f"{selected_row.get('University', '')} | "
+                    f"{selected_row.get('Difficulty Level', '')}"
+                )
+                if str(selected_row.get("Match Reason", "")).strip():
+                    st.markdown(
+                        f'<div class="vrl-match-reason">{escape(str(selected_row["Match Reason"]))}</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(truncate_text(str(selected_row.get("Course Description", "")), max_chars=320))
+            with right_col:
+                st.link_button(
+                    "Open current step",
+                    str(selected_row.get("Course URL", "")),
+                    type="primary",
+                    width="stretch",
+                )
+                st.button(
+                    "Save step",
+                    key=f"roadmap_save_{selected_course_key}",
+                    width="stretch",
+                    on_click=toggle_shortlist,
+                    args=(str(selected_row.get("Course Name", "")),),
+                )
+
+    with practice_tab:
+        practice_items = list(bundle["practice"])
+        task_options = list(range(len(practice_items)))
+        task_key = f"advisor_practice_task_{domain}"
+        if st.session_state.get(task_key) not in task_options:
+            st.session_state[task_key] = 0
+        selected_task = st.pills(
+            "Practice tasks",
+            task_options,
+            format_func=lambda index: practice_items[index][0],
+            key=task_key,
+            label_visibility="collapsed",
+            width="stretch",
+        )
+        selected_task = 0 if selected_task is None else int(selected_task)
+        task_title, task_body = practice_items[selected_task]
+        with st.container(border=True):
+            st.markdown(f"### {task_title}")
+            st.markdown(task_body)
+            st.text_area(
+                "Practice workspace",
+                placeholder="Write your approach, assumptions, result, or project notes here.",
+                key=f"advisor_practice_notes_{domain}_{selected_task}",
+                height=130,
+            )
+            st.checkbox(
+                "Mark this practice as attempted",
+                key=f"advisor_practice_done_{domain}_{selected_task}",
+            )
+
+    with deeper_tab:
+        for index, (question, options, answer_index) in enumerate(bundle["mcqs"], start=1):
+            with st.container(border=True):
+                st.markdown(f"**Q{index}. {question}**")
+                selected_answer = st.radio(
+                    "Choose one",
+                    options,
+                    index=None,
+                    key=f"advisor_mcq_{domain}_{index}",
+                    label_visibility="collapsed",
+                )
+                if selected_answer:
+                    if options.index(selected_answer) == answer_index:
+                        st.success("Correct")
+                    else:
+                        st.warning(f"Review this: {options[answer_index]}")
+
+    with resources_tab:
+        st.markdown("##### External resources")
+        resource_cols = st.columns(3)
+        for index, (label, url) in enumerate(bundle_resource_links(query_text, bundle)):
+            with resource_cols[index % 3]:
+                st.link_button(label, url, width="stretch")
+        st.markdown("##### Bundle courses")
+        for index, row in enumerate(roadmap_rows, start=1):
+            st.link_button(
+                f"{index}. {str(row.get('Course Name', ''))}",
+                str(row.get("Course URL", "")),
+                width="stretch",
+            )
 
 
 def render_smart_filter(courses: pd.DataFrame) -> None:
@@ -1591,6 +1832,8 @@ def submit_advisor_request(
 
     st.session_state["advisor_recommendations"] = recommendations
     st.session_state["advisor_context"] = active_filter_key
+    st.session_state["advisor_query_text"] = query_text
+    st.session_state["advisor_user_goal"] = request.strip()
     st.session_state["advisor_messages"] = [
         *st.session_state.get("advisor_messages", [])[-6:],
         {"role": "user", "content": request.strip()},
@@ -1611,8 +1854,8 @@ def render_advisor_chat(
         <div class="vrl-advisor-head">
             <div class="vrl-bot-avatar">AI</div>
             <div>
-                <p class="vrl-advisor-name">Course Advisor</p>
-                <p class="vrl-advisor-status">Searching the catalog locally</p>
+                <p class="vrl-advisor-name">Learning Navigator</p>
+                <p class="vrl-advisor-status">Building a local learning bundle</p>
             </div>
         </div>
         """,
@@ -1638,11 +1881,13 @@ def render_advisor_chat(
         st.session_state["advisor_messages"] = [
             {
                 "role": "assistant",
-                "content": "Tell me your background, goal, and constraints. I will recommend courses from the catalog.",
+                "content": "Tell me your goal. I will build a learning bundle from the catalog.",
             }
         ]
         st.session_state["advisor_recommendations"] = None
         st.session_state["advisor_context"] = None
+        st.session_state["advisor_query_text"] = ""
+        st.session_state["advisor_user_goal"] = ""
         st.rerun()
 
     if quick_request:
@@ -1666,13 +1911,17 @@ def render_advisor_chat(
         if advisor_context != active_filter_key:
             st.info("Manual filters changed after the last advisor answer. Ask again to refresh these recommendations.")
         else:
-            render_advisor_roadmap(advisor_recommendations)
-            render_course_grid(
+            render_advisor_roadmap(
                 advisor_recommendations,
-                show_similarity=True,
-                show_reason=True,
-                key_prefix="advisor",
+                st.session_state.get("advisor_query_text", ""),
             )
+            with st.expander("All matched courses", expanded=False):
+                render_course_grid(
+                    advisor_recommendations,
+                    show_similarity=True,
+                    show_reason=True,
+                    key_prefix="advisor",
+                )
 
     chat_request = st.chat_input(
         "Tell me what you want to learn",
