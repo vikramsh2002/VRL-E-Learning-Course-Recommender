@@ -459,8 +459,40 @@ def inject_styles() -> None:
             padding: 0.5rem 0.62rem;
         }
 
+        .vrl-practice-brief {
+            border: 1px solid rgba(91, 169, 255, 0.24);
+            border-radius: 8px;
+            background: rgba(47, 125, 225, 0.08);
+            color: #d9e8f8;
+            line-height: 1.45;
+            margin: 0.4rem 0 0.85rem;
+            padding: 0.74rem 0.82rem;
+        }
+
+        .vrl-check-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.45rem;
+            margin: 0.35rem 0 0.8rem;
+        }
+
+        .vrl-check-item {
+            border: 1px solid var(--vrl-border);
+            border-radius: 6px;
+            background: rgba(16, 24, 33, 0.72);
+            color: #dbe6f2;
+            font-size: 0.84rem;
+            font-weight: 620;
+            line-height: 1.35;
+            padding: 0.45rem 0.56rem;
+        }
+
         @media (max-width: 920px) {
             .vrl-roadmap {
+                grid-template-columns: 1fr;
+            }
+
+            .vrl-check-list {
                 grid-template-columns: 1fr;
             }
         }
@@ -1489,13 +1521,62 @@ def render_course_grid(
                 )
 
 
+def practice_task(
+    title: str,
+    task: str,
+    goal: str,
+    deliverables: tuple[str, ...],
+    checks: tuple[tuple[str, tuple[str, ...]], ...],
+) -> dict[str, object]:
+    return {
+        "title": title,
+        "task": task,
+        "goal": goal,
+        "deliverables": deliverables,
+        "checks": checks,
+    }
+
+
 LEARNING_BUNDLES = {
     "genai": {
         "label": "Generative AI",
         "practice": [
-            ("Prompt comparison lab", "Write two prompts for the same task, compare output quality, and note which instruction improved accuracy."),
-            ("Document summarizer", "Pick a public article, design a summary prompt, then add a checklist for hallucination checks."),
-            ("Mini assistant brief", "Define a narrow assistant persona, required inputs, refusal boundaries, and a success metric."),
+            practice_task(
+                "Prompt comparison lab",
+                "Write two prompts for the same task, compare output quality, and note which instruction improved accuracy.",
+                "Shows whether you can design instructions, compare outputs, and improve a GenAI result intentionally.",
+                ("Task and audience", "Two prompt versions", "Output comparison", "Improvement decision"),
+                (
+                    ("Task context", ("task", "audience", "goal", "user")),
+                    ("Two prompt versions", ("prompt", "version", "instruction")),
+                    ("Comparison evidence", ("compare", "difference", "quality", "accuracy")),
+                    ("Improvement decision", ("improve", "better", "constraint", "format")),
+                ),
+            ),
+            practice_task(
+                "Document summarizer",
+                "Pick a public article, design a summary prompt, then add a checklist for hallucination checks.",
+                "Validates that you can ask for grounded summaries and define checks before trusting the answer.",
+                ("Source context", "Summary prompt", "Grounding checks", "Risk notes"),
+                (
+                    ("Source context", ("article", "source", "document", "link")),
+                    ("Summary instruction", ("summary", "summarize", "bullet", "brief")),
+                    ("Hallucination check", ("hallucination", "evidence", "verify", "source")),
+                    ("Risk handling", ("risk", "uncertain", "citation", "fact")),
+                ),
+            ),
+            practice_task(
+                "Mini assistant brief",
+                "Define a narrow assistant persona, required inputs, refusal boundaries, and a success metric.",
+                "Checks whether you can translate a GenAI idea into a usable assistant specification.",
+                ("Assistant scope", "Required inputs", "Boundaries", "Success metric"),
+                (
+                    ("Assistant scope", ("assistant", "scope", "persona", "role")),
+                    ("Inputs", ("input", "fields", "required", "context")),
+                    ("Boundaries", ("boundary", "refuse", "limit", "policy")),
+                    ("Success metric", ("metric", "success", "evaluate", "quality")),
+                ),
+            ),
         ],
         "mcqs": [
             ("Which signal most strongly indicates an LLM hallucination risk?", ["A source-backed answer", "A confident answer without evidence", "A short answer", "A rewritten answer"], 1),
@@ -1507,9 +1588,42 @@ LEARNING_BUNDLES = {
     "data": {
         "label": "Data Science",
         "practice": [
-            ("EDA notebook", "Choose a CSV, profile missing values, create three charts, and write five findings."),
-            ("SQL insight drill", "Write queries for filtering, grouping, joins, and ranking on one dataset."),
-            ("Dashboard brief", "Turn one business question into metrics, visuals, and a recommendation."),
+            practice_task(
+                "EDA notebook",
+                "Choose a CSV, profile missing values, create three charts, and write five findings.",
+                "Validates that you can inspect a dataset before modeling and turn raw columns into useful observations.",
+                ("Dataset context", "Missing-value profile", "Three chart ideas", "Five findings"),
+                (
+                    ("Dataset context", ("dataset", "csv", "rows", "columns", "source")),
+                    ("Missing values", ("missing", "null", "nan", "blank")),
+                    ("Charts", ("chart", "plot", "visual", "histogram", "bar")),
+                    ("Findings", ("finding", "insight", "trend", "pattern")),
+                ),
+            ),
+            practice_task(
+                "SQL insight drill",
+                "Write queries for filtering, grouping, joins, and ranking on one dataset.",
+                "Checks whether you can move from a question to the SQL patterns used in real analysis work.",
+                ("Business question", "Filter query", "Group/join query", "Ranked insight"),
+                (
+                    ("Business question", ("question", "business", "goal", "metric")),
+                    ("Filtering", ("where", "filter", "condition")),
+                    ("Grouping or joins", ("group", "join", "aggregate", "sum", "count")),
+                    ("Ranking", ("rank", "order", "top", "limit")),
+                ),
+            ),
+            practice_task(
+                "Dashboard brief",
+                "Turn one business question into metrics, visuals, and a recommendation.",
+                "Shows whether you can design a dashboard around decisions instead of only placing charts on a page.",
+                ("Decision question", "Metrics", "Visual layout", "Recommendation"),
+                (
+                    ("Decision question", ("decision", "question", "stakeholder", "business")),
+                    ("Metrics", ("metric", "kpi", "measure", "rate")),
+                    ("Visual layout", ("dashboard", "visual", "chart", "layout")),
+                    ("Recommendation", ("recommend", "action", "next", "decision")),
+                ),
+            ),
         ],
         "mcqs": [
             ("What is the main goal of exploratory data analysis?", ["Deploy a model", "Understand patterns and data quality", "Encrypt the dataset", "Write production APIs"], 1),
@@ -1521,9 +1635,42 @@ LEARNING_BUNDLES = {
     "cybersecurity": {
         "label": "Cybersecurity",
         "practice": [
-            ("Threat model", "Pick a simple app and list assets, entry points, threats, and mitigations."),
-            ("Security checklist", "Create checks for password policy, logging, access control, and patching."),
-            ("Incident response drill", "Write a short response plan for a suspicious login event."),
+            practice_task(
+                "Threat model",
+                "Pick a simple app and list assets, entry points, threats, and mitigations.",
+                "Validates that you can reason about what needs protection and where risk enters the system.",
+                ("System scope", "Assets", "Entry points", "Mitigations"),
+                (
+                    ("System scope", ("app", "system", "scope", "user")),
+                    ("Assets", ("asset", "data", "credential", "service")),
+                    ("Entry points", ("entry", "endpoint", "login", "input")),
+                    ("Mitigations", ("mitigation", "control", "protect", "reduce")),
+                ),
+            ),
+            practice_task(
+                "Security checklist",
+                "Create checks for password policy, logging, access control, and patching.",
+                "Checks whether you can convert security fundamentals into operational review items.",
+                ("Password control", "Access control", "Logging", "Patch review"),
+                (
+                    ("Password control", ("password", "mfa", "authentication")),
+                    ("Access control", ("access", "permission", "role", "privilege")),
+                    ("Logging", ("log", "audit", "monitor", "alert")),
+                    ("Patch review", ("patch", "update", "vulnerability", "version")),
+                ),
+            ),
+            practice_task(
+                "Incident response drill",
+                "Write a short response plan for a suspicious login event.",
+                "Shows whether you understand the first practical steps when an alert becomes an incident.",
+                ("Trigger", "Containment", "Investigation", "Communication"),
+                (
+                    ("Trigger", ("alert", "login", "suspicious", "event")),
+                    ("Containment", ("contain", "disable", "revoke", "block")),
+                    ("Investigation", ("investigate", "log", "timeline", "evidence")),
+                    ("Communication", ("notify", "escalate", "owner", "report")),
+                ),
+            ),
         ],
         "mcqs": [
             ("What does least privilege mean?", ["Give users admin access", "Give only required access", "Disable logs", "Use one shared account"], 1),
@@ -1535,9 +1682,42 @@ LEARNING_BUNDLES = {
     "cloud": {
         "label": "Cloud DevOps",
         "practice": [
-            ("Deployment map", "Draw source control, build, test, deploy, monitoring, and rollback steps for one app."),
-            ("Pipeline checklist", "Define checks for tests, secrets, approvals, artifacts, and release notes."),
-            ("Cloud cost review", "Estimate compute, storage, and network drivers for a small service."),
+            practice_task(
+                "Deployment map",
+                "Draw source control, build, test, deploy, monitoring, and rollback steps for one app.",
+                "Validates that you understand the flow from code change to a monitored release.",
+                ("Source flow", "Build/test step", "Deployment step", "Rollback/monitoring"),
+                (
+                    ("Source flow", ("git", "source", "commit", "branch")),
+                    ("Build and test", ("build", "test", "ci", "artifact")),
+                    ("Deployment", ("deploy", "release", "environment", "service")),
+                    ("Recovery", ("rollback", "monitor", "alert", "health")),
+                ),
+            ),
+            practice_task(
+                "Pipeline checklist",
+                "Define checks for tests, secrets, approvals, artifacts, and release notes.",
+                "Checks whether you can design release guardrails before production deployment.",
+                ("Test gate", "Secrets handling", "Approval", "Release evidence"),
+                (
+                    ("Test gate", ("test", "quality", "gate", "check")),
+                    ("Secrets handling", ("secret", "credential", "token", "vault")),
+                    ("Approval", ("approval", "review", "owner")),
+                    ("Release evidence", ("artifact", "release", "notes", "version")),
+                ),
+            ),
+            practice_task(
+                "Cloud cost review",
+                "Estimate compute, storage, and network drivers for a small service.",
+                "Shows whether you can identify the cloud choices that affect cost before scaling.",
+                ("Service context", "Compute driver", "Storage driver", "Cost action"),
+                (
+                    ("Service context", ("service", "users", "traffic", "workload")),
+                    ("Compute", ("compute", "cpu", "instance", "container")),
+                    ("Storage or network", ("storage", "database", "network", "egress")),
+                    ("Cost action", ("cost", "optimize", "budget", "reduce")),
+                ),
+            ),
         ],
         "mcqs": [
             ("What is a CI/CD pipeline for?", ["Manual copy-paste releases", "Automating build, test, and deployment", "Writing invoices", "Replacing source control"], 1),
@@ -1549,9 +1729,42 @@ LEARNING_BUNDLES = {
     "general": {
         "label": "Learning Path",
         "practice": [
-            ("Concept map", "Write the top ten terms in this topic and connect each term to one practical use."),
-            ("Mini project", "Build or outline a small project that applies the first two courses."),
-            ("Portfolio note", "Summarize what you learned, what you built, and what you would improve next."),
+            practice_task(
+                "Concept map",
+                "Write the top ten terms in this topic and connect each term to one practical use.",
+                "Validates that you can explain the subject vocabulary in a useful context.",
+                ("Topic terms", "Connections", "Practical use", "Learning gap"),
+                (
+                    ("Topic terms", ("term", "concept", "topic", "definition")),
+                    ("Connections", ("connect", "relationship", "depends", "relates")),
+                    ("Practical use", ("use", "example", "apply", "scenario")),
+                    ("Learning gap", ("gap", "unclear", "next", "improve")),
+                ),
+            ),
+            practice_task(
+                "Mini project",
+                "Build or outline a small project that applies the first two courses.",
+                "Checks whether you can turn course content into something concrete.",
+                ("Project goal", "Inputs", "Build steps", "Result"),
+                (
+                    ("Project goal", ("project", "goal", "problem", "user")),
+                    ("Inputs", ("input", "data", "resource", "tool")),
+                    ("Build steps", ("step", "build", "implement", "create")),
+                    ("Result", ("result", "output", "demo", "deliverable")),
+                ),
+            ),
+            practice_task(
+                "Portfolio note",
+                "Summarize what you learned, what you built, and what you would improve next.",
+                "Shows whether you can capture learning as evidence for interviews or future review.",
+                ("Learning summary", "Built artifact", "Evidence", "Next improvement"),
+                (
+                    ("Learning summary", ("learned", "skill", "concept", "understand")),
+                    ("Built artifact", ("built", "created", "project", "artifact")),
+                    ("Evidence", ("evidence", "result", "screenshot", "link")),
+                    ("Next improvement", ("improve", "next", "better", "iterate")),
+                ),
+            ),
         ],
         "mcqs": [
             ("What makes a learning goal useful?", ["It is vague", "It has a skill, context, and outcome", "It avoids practice", "It has no deadline"], 1),
@@ -1595,6 +1808,44 @@ def bundle_resource_links(query_text: str, bundle: dict[str, object]) -> list[tu
         ("Kaggle", f"https://www.kaggle.com/search?q={encoded}"),
         ("Microsoft Learn", f"https://learn.microsoft.com/en-us/search/?terms={encoded}"),
     ]
+
+
+def practice_word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+", text))
+
+
+def validate_practice_attempt(
+    attempt_text: str,
+    checks: tuple[tuple[str, tuple[str, ...]], ...],
+) -> dict[str, object]:
+    normalized_attempt = normalize_phrase(attempt_text)
+    passed: list[str] = []
+    missing: list[str] = []
+
+    if practice_word_count(attempt_text) >= 45:
+        passed.append("Enough detail")
+    else:
+        missing.append("Add at least 45 words across the structured fields")
+
+    for label, keywords in checks:
+        if any(phrase_in_text(keyword, normalized_attempt) for keyword in keywords):
+            passed.append(label)
+        else:
+            missing.append(label)
+
+    total = len(passed) + len(missing)
+    score = int(round((len(passed) / total) * 100)) if total else 0
+    return {"score": score, "passed": passed, "missing": missing}
+
+
+def render_check_items(items: Iterable[str]) -> None:
+    if not items:
+        return
+    item_markup = "".join(
+        f'<div class="vrl-check-item">{escape(str(item))}</div>'
+        for item in items
+    )
+    st.markdown(f'<div class="vrl-check-list">{item_markup}</div>', unsafe_allow_html=True)
 
 
 def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") -> None:
@@ -1726,26 +1977,81 @@ def render_advisor_roadmap(recommendations: pd.DataFrame, query_text: str = "") 
         selected_task = st.pills(
             "Practice tasks",
             task_options,
-            format_func=lambda index: practice_items[index][0],
+            format_func=lambda index: str(practice_items[index].get("title", "Practice task")),
             key=task_key,
             label_visibility="collapsed",
             width="stretch",
         )
         selected_task = 0 if selected_task is None else int(selected_task)
-        task_title, task_body = practice_items[selected_task]
+        task = practice_items[selected_task]
+        task_title = str(task.get("title", "Practice task"))
+        task_body = str(task.get("task", "Complete a practical checkpoint for this topic."))
+        task_goal = str(task.get("goal", "Practice the current topic with a concrete output."))
+        deliverables = tuple(str(item) for item in task.get("deliverables", ()))
+        checks = tuple(task.get("checks", ()))
+        field_prefix = f"advisor_practice_{domain}_{selected_task}"
+        result_key = f"{field_prefix}_validation"
+
         with st.container(border=True):
             st.markdown(f"### {task_title}")
-            st.markdown(task_body)
-            st.text_area(
-                "Practice workspace",
-                placeholder="Write your approach, assumptions, result, or project notes here.",
-                key=f"advisor_practice_notes_{domain}_{selected_task}",
-                height=130,
+            st.markdown(
+                f'<div class="vrl-practice-brief"><strong>What this section validates:</strong> '
+                f'{escape(task_goal)} It checks for concrete evidence, so a random note will show missing criteria.</div>',
+                unsafe_allow_html=True,
             )
-            st.checkbox(
-                "Mark this practice as attempted",
-                key=f"advisor_practice_done_{domain}_{selected_task}",
+            st.markdown(f"**Task:** {task_body}")
+            st.markdown("##### Expected deliverables")
+            render_check_items(deliverables)
+            st.markdown("##### Validation rubric")
+            render_check_items(label for label, _ in checks)
+
+            plan = st.text_area(
+                "1. Plan or setup",
+                placeholder="Mention the dataset, app, prompt, source, or scenario you used and what you are trying to prove.",
+                key=f"{field_prefix}_plan",
+                height=92,
             )
+            evidence = st.text_area(
+                "2. Evidence created",
+                placeholder="List the queries, charts, checks, prompts, controls, or outputs you actually produced.",
+                key=f"{field_prefix}_evidence",
+                height=108,
+            )
+            reflection = st.text_area(
+                "3. Result and next improvement",
+                placeholder="Write the key finding, decision, mistake, or next improvement from this practice.",
+                key=f"{field_prefix}_reflection",
+                height=92,
+            )
+            attempt_text = "\n".join([plan, evidence, reflection])
+            attempt_signature = normalize_phrase(attempt_text)
+            if st.button("Validate practice", type="primary", width="stretch", key=f"{field_prefix}_validate"):
+                validation_result = validate_practice_attempt(attempt_text, checks)
+                validation_result["attempt_signature"] = attempt_signature
+                st.session_state[result_key] = validation_result
+
+            result = st.session_state.get(result_key)
+            if result and result.get("attempt_signature") != attempt_signature:
+                st.info("Your fields changed after the last validation. Run validation again for the latest attempt.")
+            elif result:
+                score = int(result.get("score", 0))
+                st.progress(score / 100, text=f"{score}% validation score")
+                if score >= 80:
+                    st.success("Validated: this looks like a meaningful practice attempt.")
+                elif score >= 60:
+                    st.warning("Partially valid: add the missing evidence below before treating it as complete.")
+                else:
+                    st.error("Not validated yet: the answer is too thin or misses the required proof points.")
+
+                covered_col, missing_col = st.columns(2)
+                with covered_col:
+                    st.markdown("##### Covered")
+                    render_check_items(result.get("passed", []))
+                with missing_col:
+                    st.markdown("##### Missing")
+                    render_check_items(result.get("missing", []))
+            else:
+                st.info("Fill the three fields and run validation. This is a local rubric check, not an AI grade.")
 
     with deeper_tab:
         for index, (question, options, answer_index) in enumerate(bundle["mcqs"], start=1):
