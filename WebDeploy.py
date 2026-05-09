@@ -418,6 +418,52 @@ def inject_styles() -> None:
             margin: 0.15rem 0 0;
         }
 
+        .vrl-roadmap {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin: 0.75rem 0 1rem;
+        }
+
+        .vrl-roadmap-step {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background: rgba(16, 24, 33, 0.82);
+            padding: 0.78rem;
+            min-height: 8rem;
+        }
+
+        .vrl-roadmap-label {
+            color: var(--vrl-gold);
+            font-size: 0.78rem;
+            font-weight: 760;
+            margin-bottom: 0.28rem;
+        }
+
+        .vrl-roadmap-title {
+            font-size: 0.94rem;
+            font-weight: 730;
+            line-height: 1.28;
+            margin-bottom: 0.35rem;
+        }
+
+        .vrl-match-reason {
+            border-left: 3px solid var(--vrl-gold);
+            background: rgba(215, 181, 109, 0.1);
+            color: #efe5ce;
+            border-radius: 6px;
+            font-size: 0.84rem;
+            line-height: 1.4;
+            margin: 0.2rem 0 0.72rem;
+            padding: 0.5rem 0.62rem;
+        }
+
+        @media (max-width: 920px) {
+            .vrl-roadmap {
+                grid-template-columns: 1fr;
+            }
+        }
+
         div[data-testid="stChatMessage"] {
             border: 1px solid var(--vrl-border);
             border-radius: 8px;
@@ -942,6 +988,89 @@ def advisor_query_text(messages: list[dict[str, str]], request: str) -> str:
     return expand_goal_text(" ".join([*previous_user_context, request]))
 
 
+def goal_terms(goal_text: str) -> list[str]:
+    normalized = normalize_phrase(goal_text)
+    terms = [
+        token
+        for token in re.findall(r"[a-z0-9+#.]+", normalized)
+        if token not in SMART_FILTER_STOPWORDS and len(token) > 2
+    ]
+    phrase_terms = [
+        "generative ai",
+        "large language",
+        "prompt engineering",
+        "machine learning",
+        "deep learning",
+        "data analyst",
+        "data analytics",
+        "cybersecurity",
+        "cloud",
+        "devops",
+        "azure",
+        "sql",
+        "python",
+    ]
+    for phrase in phrase_terms:
+        if phrase_in_text(phrase, normalized):
+            terms.insert(0, phrase)
+    unique_terms = list(dict.fromkeys(terms))
+    return [
+        term
+        for term in unique_terms
+        if not any(term != other and phrase_in_text(term, other) for other in unique_terms)
+    ]
+
+
+def roadmap_stage(difficulty: object) -> str:
+    normalized = str(difficulty or "").lower()
+    if "beginner" in normalized:
+        return "Foundation"
+    if "advanced" in normalized:
+        return "Specialize"
+    return "Build"
+
+
+def explain_course_match(course: pd.Series, query_text: str) -> str:
+    course_text = normalize_phrase(
+        " ".join(
+            str(course.get(column, ""))
+            for column in ("Course Name", "Course Description", "Skills", "Category", "Provider")
+        )
+    )
+    matched_terms = [
+        term
+        for term in goal_terms(query_text)
+        if phrase_in_text(normalize_phrase(term), course_text)
+    ][:3]
+    matched_skills = list(dict.fromkeys(
+        format_skill_label(skill)
+        for skill in course.get("Skill Tokens", ())
+        if normalize_phrase(format_skill_label(skill)) in {normalize_phrase(term) for term in matched_terms}
+    ))[:2]
+
+    reason_bits: list[str] = []
+    if matched_terms:
+        reason_bits.append("matches " + ", ".join(term.title() for term in matched_terms))
+    if matched_skills:
+        reason_bits.append("skill signals " + ", ".join(matched_skills))
+    reason_bits.append(f"{course.get('Difficulty Level', 'Mixed')} level")
+    reason_bits.append(str(course.get("Provider", "Catalog")))
+    return "; ".join(reason_bits) + "."
+
+
+def add_advisor_context(recommendations: pd.DataFrame, query_text: str) -> pd.DataFrame:
+    if recommendations.empty:
+        return recommendations
+
+    enriched = recommendations.copy()
+    enriched["Roadmap Stage"] = enriched["Difficulty Level"].apply(roadmap_stage)
+    enriched["Match Reason"] = enriched.apply(
+        lambda row: explain_course_match(row, query_text),
+        axis=1,
+    )
+    return enriched
+
+
 def recommend_for_goal(
     goal_text: str,
     candidate_courses: pd.DataFrame,
@@ -1265,6 +1394,7 @@ def render_course_card(
     *,
     rank: int | None = None,
     show_similarity: bool = False,
+    show_reason: bool = False,
     key_prefix: str = "course",
 ) -> None:
     course_name = str(course["Course Name"])
@@ -1296,6 +1426,12 @@ def render_course_card(
         if show_similarity and similarity_value is not None:
             st.progress(similarity_value, text=f"{similarity_value:.0%} match")
 
+        if show_reason and str(course.get("Match Reason", "")).strip():
+            st.markdown(
+                f'<div class="vrl-match-reason">{escape(str(course["Match Reason"]))}</div>',
+                unsafe_allow_html=True,
+            )
+
         st.markdown(
             f'<div class="vrl-description">{escape(truncate_text(course["Course Description"]))}</div>',
             unsafe_allow_html=True,
@@ -1324,6 +1460,7 @@ def render_course_grid(
     courses: pd.DataFrame,
     *,
     show_similarity: bool = False,
+    show_reason: bool = False,
     key_prefix: str = "grid",
 ) -> None:
     if courses.empty:
@@ -1342,8 +1479,62 @@ def render_course_grid(
                     course,
                     rank=start + offset,
                     show_similarity=show_similarity,
+                    show_reason=show_reason,
                     key_prefix=f"{key_prefix}_{index}",
                 )
+
+
+def render_advisor_roadmap(recommendations: pd.DataFrame) -> None:
+    if recommendations.empty or "Roadmap Stage" not in recommendations.columns:
+        return
+
+    stage_order = ["Foundation", "Build", "Specialize"]
+    stage_copy = {
+        "Foundation": "Start here",
+        "Build": "Practice next",
+        "Specialize": "Go deeper",
+    }
+    selected_indexes: set[object] = set()
+    roadmap_rows: list[pd.Series] = []
+    for stage in stage_order:
+        stage_rows = recommendations[
+            (recommendations["Roadmap Stage"] == stage)
+            & (~recommendations.index.isin(selected_indexes))
+        ]
+        if stage_rows.empty:
+            continue
+        row = stage_rows.iloc[0]
+        roadmap_rows.append(row)
+        selected_indexes.add(row.name)
+
+    if len(roadmap_rows) < 3:
+        for _, row in recommendations.iterrows():
+            if row.name in selected_indexes:
+                continue
+            roadmap_rows.append(row)
+            selected_indexes.add(row.name)
+            if len(roadmap_rows) >= 3:
+                break
+
+    if not roadmap_rows:
+        return
+
+    cards = []
+    for row in roadmap_rows[:3]:
+        stage = str(row.get("Roadmap Stage", "Build"))
+        label = stage_copy.get(stage, "Recommended")
+        cards.append(
+            f"""
+            <div class="vrl-roadmap-step">
+                <div class="vrl-roadmap-label">{escape(label)} | {escape(stage)}</div>
+                <div class="vrl-roadmap-title">{escape(str(row.get("Course Name", "")))}</div>
+                <div class="vrl-meta">{escape(str(row.get("Provider", "")))} | {escape(str(row.get("Difficulty Level", "")))}</div>
+            </div>
+            """
+        )
+
+    st.markdown('<div class="vrl-section-title">Suggested learning roadmap</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="vrl-roadmap">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
 def render_smart_filter(courses: pd.DataFrame) -> None:
@@ -1393,6 +1584,7 @@ def submit_advisor_request(
         )
         status.write("Ranking best-fit courses")
         recommendations = sort_recommendations(recommendations, rating_sort)
+        recommendations = add_advisor_context(recommendations, query_text)
         reply = advisor_reply(recommendations, len(filtered_courses))
         status.update(label="Recommendations ready", state="complete", expanded=False)
 
@@ -1473,9 +1665,11 @@ def render_advisor_chat(
         if advisor_context != active_filter_key:
             st.info("Manual filters changed after the last advisor answer. Ask again to refresh these recommendations.")
         else:
+            render_advisor_roadmap(advisor_recommendations)
             render_course_grid(
                 advisor_recommendations,
                 show_similarity=True,
+                show_reason=True,
                 key_prefix="advisor",
             )
 
