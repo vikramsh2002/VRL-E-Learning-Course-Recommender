@@ -1,6 +1,8 @@
 import base64
 from collections import Counter
 from html import escape
+import importlib.util
+import os
 from pathlib import Path
 import re
 from typing import Iterable
@@ -24,6 +26,11 @@ MAX_RECOMMENDATIONS = 12
 SORT_SIMILARITY = "Similarity first"
 SORT_HIGH_TO_LOW = "Rating high to low"
 SORT_LOW_TO_HIGH = "Rating low to high"
+VALIDATOR_BACKEND_ENV = "VRL_VALIDATOR_BACKEND"
+VALIDATOR_PROFILE_ENV = "VRL_AI_PROFILE"
+VALIDATOR_MODEL_ENV = "VRL_VALIDATOR_MODEL"
+VALIDATOR_TFIDF = "tfidf"
+VALIDATOR_MINILM = "minilm"
 
 SMART_FILTER_STOPWORDS = {
     "a",
@@ -2030,15 +2037,127 @@ def practice_unique_word_count(text: str) -> int:
     )
 
 
+def validation_runtime_profile() -> str:
+    configured = normalize_phrase(os.getenv(VALIDATOR_PROFILE_ENV, ""))
+    if configured in {"limited", "streamlit", "streamlit cloud", "streamlit free"}:
+        return "limited"
+    if configured in {"scaled", "server", "production"}:
+        return "scaled"
+
+    cwd = Path.cwd().as_posix().lower()
+    home = str(Path.home()).lower()
+    if cwd.startswith("/mount/src") or "streamlit" in cwd or home.endswith("/adminuser"):
+        return "limited"
+    return "local"
+
+
+def optional_module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def choose_validation_backend() -> dict[str, object]:
+    requested = normalize_phrase(os.getenv(VALIDATOR_BACKEND_ENV, "auto"))
+    profile = validation_runtime_profile()
+    model_name = os.getenv(VALIDATOR_MODEL_ENV, "sentence-transformers/all-MiniLM-L6-v2")
+
+    if requested in {"tfidf", "light", "semantic light", "streamlit"}:
+        backend = VALIDATOR_TFIDF
+    elif requested in {"minilm", "sentence transformers", "sentence transformer", "embedding"}:
+        backend = VALIDATOR_MINILM if optional_module_available("sentence_transformers") else VALIDATOR_TFIDF
+    elif profile == "scaled" and optional_module_available("sentence_transformers"):
+        backend = VALIDATOR_MINILM
+    else:
+        backend = VALIDATOR_TFIDF
+
+    if backend == VALIDATOR_MINILM:
+        return {
+            "backend": VALIDATOR_MINILM,
+            "label": "MiniLM semantic",
+            "profile": profile,
+            "model": model_name,
+            "threshold": 0.42,
+            "note": "Open-source embedding evaluator for scaled deployments.",
+        }
+
+    return {
+        "backend": VALIDATOR_TFIDF,
+        "label": "Light semantic",
+        "profile": profile,
+        "model": "scikit-learn TF-IDF",
+        "threshold": 0.08,
+        "note": "Streamlit-safe evaluator with no model download or credentials.",
+    }
+
+
+@st.cache_resource(show_spinner=False)
+def load_minilm_validator(model_name: str):
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(model_name)
+
+
+def tfidf_semantic_similarity(left_text: str, right_text: str) -> float:
+    left = normalize_phrase(left_text)
+    right = normalize_phrase(right_text)
+    if not left or not right:
+        return 0.0
+
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2),
+            max_features=5000,
+        )
+        vectors = vectorizer.fit_transform([left, right])
+        return float(cosine_similarity(vectors[0], vectors[1]).ravel()[0])
+    except ValueError:
+        return 0.0
+
+
+def minilm_semantic_similarity(left_text: str, right_text: str, model_name: str) -> float:
+    model = load_minilm_validator(model_name)
+    vectors = model.encode(
+        [left_text, right_text],
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return float(cosine_similarity([vectors[0]], [vectors[1]]).ravel()[0])
+
+
+def semantic_similarity(left_text: str, right_text: str, backend_info: dict[str, object]) -> float:
+    if backend_info.get("backend") == VALIDATOR_MINILM:
+        try:
+            return minilm_semantic_similarity(left_text, right_text, str(backend_info.get("model", "")))
+        except Exception:
+            backend_info["backend"] = VALIDATOR_TFIDF
+            backend_info["label"] = "Light semantic"
+            backend_info["model"] = "scikit-learn TF-IDF"
+            backend_info["threshold"] = 0.08
+            backend_info["note"] = "MiniLM was unavailable, so validation fell back to the Streamlit-safe evaluator."
+    return tfidf_semantic_similarity(left_text, right_text)
+
+
+def criterion_reference_text(
+    label: str,
+    keywords: tuple[str, ...],
+    task_context: str,
+) -> str:
+    return " ".join([label, *keywords, task_context])
+
+
 def validate_practice_attempt(
     attempt_text: str,
     checks: tuple[tuple[str, tuple[str, ...]], ...],
     minimum_words: int = 45,
     field_texts: tuple[tuple[str, str], ...] = (),
+    task_context: str = "",
 ) -> dict[str, object]:
     normalized_attempt = normalize_phrase(attempt_text)
     passed: list[str] = []
     missing: list[str] = []
+    semantic_scores: list[dict[str, object]] = []
+    backend_info = choose_validation_backend()
+    semantic_threshold = float(backend_info["threshold"])
     word_count = practice_word_count(attempt_text)
     unique_words = practice_unique_word_count(attempt_text)
     minimum_unique_words = max(10, min(18, minimum_words // 3))
@@ -2060,7 +2179,20 @@ def validate_practice_attempt(
             missing.append(f"Add meaningful detail in {field_label}")
 
     for label, keywords in checks:
-        if any(phrase_in_text(keyword, normalized_attempt) for keyword in keywords):
+        reference_text = criterion_reference_text(label, keywords, task_context)
+        score = semantic_similarity(attempt_text, reference_text, backend_info)
+        exact_signal = any(phrase_in_text(keyword, normalized_attempt) for keyword in keywords)
+        criterion_passed = score >= semantic_threshold or (
+            exact_signal and word_count >= minimum_words and unique_words >= minimum_unique_words
+        )
+        semantic_scores.append(
+            {
+                "criterion": label,
+                "score": round(score, 3),
+                "passed": criterion_passed,
+            }
+        )
+        if criterion_passed:
             passed.append(label)
         else:
             missing.append(label)
@@ -2072,6 +2204,8 @@ def validate_practice_attempt(
         "passed": passed,
         "missing": missing,
         "valid": not missing,
+        "backend": backend_info,
+        "semantic_scores": semantic_scores,
     }
 
 
@@ -2340,6 +2474,8 @@ def render_advisor_roadmap(
         deliverables = tuple(str(item) for item in task.get("deliverables", ()))
         checks = tuple(task.get("checks", ()))
         minimum_words = int(task.get("minimum_words", 45))
+        task_context = " ".join([task_title, task_body, task_goal, *deliverables])
+        validator_info = choose_validation_backend()
         field_prefix = f"advisor_practice_{domain}_{anchor_key}_{selected_task}"
         result_key = f"{field_prefix}_validation"
 
@@ -2374,6 +2510,9 @@ def render_advisor_roadmap(
             )
             st.markdown(f"**Task:** {task_body}")
             st.caption(f"Minimum evidence target: {minimum_words} words. Complete a course to make this practice follow your progress.")
+            st.caption(
+                f"Validator engine: {validator_info['label']} ({validator_info['profile']} profile) - {validator_info['note']}"
+            )
             st.markdown("##### Expected deliverables")
             render_check_items(deliverables)
             st.markdown("##### Validation rubric")
@@ -2409,6 +2548,7 @@ def render_advisor_roadmap(
                         ("Evidence", evidence),
                         ("Result", reflection),
                     ),
+                    task_context=task_context,
                 )
                 validation_result["attempt_signature"] = attempt_signature
                 st.session_state[result_key] = validation_result
@@ -2433,8 +2573,18 @@ def render_advisor_roadmap(
                 with missing_col:
                     st.markdown("##### Missing")
                     render_check_items(result.get("missing", []))
+                with st.expander("Semantic evidence scores", expanded=False):
+                    backend = result.get("backend", {})
+                    st.caption(
+                        f"{backend.get('label', 'Validator')} using {backend.get('model', 'local model')}"
+                    )
+                    st.dataframe(
+                        pd.DataFrame(result.get("semantic_scores", [])),
+                        hide_index=True,
+                        width="stretch",
+                    )
             else:
-                st.info("Fill the three fields and run validation. This is a local rubric check, not an AI grade.")
+                st.info("Fill the three fields and run validation. The app will use the best no-credential validator available for this deployment profile.")
 
     with deeper_tab:
         for index, (question, options, answer_index) in enumerate(bundle["mcqs"], start=1):
