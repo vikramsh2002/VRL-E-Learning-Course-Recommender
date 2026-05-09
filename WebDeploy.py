@@ -2020,19 +2020,44 @@ def practice_word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9]+", text))
 
 
+def practice_unique_word_count(text: str) -> int:
+    return len(
+        {
+            token
+            for token in re.findall(r"[A-Za-z0-9+#.]+", normalize_phrase(text))
+            if token not in SMART_FILTER_STOPWORDS and len(token) > 2
+        }
+    )
+
+
 def validate_practice_attempt(
     attempt_text: str,
     checks: tuple[tuple[str, tuple[str, ...]], ...],
     minimum_words: int = 45,
+    field_texts: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     normalized_attempt = normalize_phrase(attempt_text)
     passed: list[str] = []
     missing: list[str] = []
+    word_count = practice_word_count(attempt_text)
+    unique_words = practice_unique_word_count(attempt_text)
+    minimum_unique_words = max(10, min(18, minimum_words // 3))
 
-    if practice_word_count(attempt_text) >= minimum_words:
+    if word_count >= minimum_words:
         passed.append("Enough detail")
     else:
         missing.append(f"Add at least {minimum_words} words across the structured fields")
+
+    if unique_words >= minimum_unique_words:
+        passed.append("Varied evidence")
+    else:
+        missing.append("Use more specific, varied details instead of repeated or random text")
+
+    for field_label, field_text in field_texts:
+        if practice_word_count(field_text) >= 5 and practice_unique_word_count(field_text) >= 3:
+            passed.append(f"{field_label} completed")
+        else:
+            missing.append(f"Add meaningful detail in {field_label}")
 
     for label, keywords in checks:
         if any(phrase_in_text(keyword, normalized_attempt) for keyword in keywords):
@@ -2042,7 +2067,12 @@ def validate_practice_attempt(
 
     total = len(passed) + len(missing)
     score = int(round((len(passed) / total) * 100)) if total else 0
-    return {"score": score, "passed": passed, "missing": missing}
+    return {
+        "score": score,
+        "passed": passed,
+        "missing": missing,
+        "valid": not missing,
+    }
 
 
 def render_check_items(items: Iterable[str]) -> None:
@@ -2370,7 +2400,16 @@ def render_advisor_roadmap(
             attempt_text = "\n".join([plan, evidence, reflection])
             attempt_signature = normalize_phrase(attempt_text)
             if st.button("Validate practice", type="primary", width="stretch", key=f"{field_prefix}_validate"):
-                validation_result = validate_practice_attempt(attempt_text, checks, minimum_words=minimum_words)
+                validation_result = validate_practice_attempt(
+                    attempt_text,
+                    checks,
+                    minimum_words=minimum_words,
+                    field_texts=(
+                        ("Plan", plan),
+                        ("Evidence", evidence),
+                        ("Result", reflection),
+                    ),
+                )
                 validation_result["attempt_signature"] = attempt_signature
                 st.session_state[result_key] = validation_result
 
@@ -2380,7 +2419,7 @@ def render_advisor_roadmap(
             elif result:
                 score = int(result.get("score", 0))
                 st.progress(score / 100, text=f"{score}% validation score")
-                if score >= 80:
+                if result.get("valid"):
                     st.success("Validated: this looks like a meaningful practice attempt.")
                 elif score >= 60:
                     st.warning("Partially valid: add the missing evidence below before treating it as complete.")
