@@ -613,6 +613,8 @@ def inject_styles() -> None:
             border-radius: 6px;
             font-weight: 650;
             border-color: var(--vrl-border);
+            min-height: 2.9rem;
+            white-space: nowrap;
         }
 
         div.stButton > button[kind="primary"],
@@ -1681,14 +1683,13 @@ def render_course_card(
         )
         render_skill_chips(course.get("Skill Tokens", ()))
 
-        open_col, save_col, done_col = st.columns([0.46, 0.27, 0.27])
-        with open_col:
-            st.link_button(
-                "Open course",
-                str(course["Course URL"]),
-                type="primary",
-                width="stretch",
-            )
+        st.link_button(
+            "Open course",
+            str(course["Course URL"]),
+            type="primary",
+            width="stretch",
+        )
+        save_col, done_col = st.columns(2)
         with save_col:
             st.button(
                 "Saved" if saved else "Save",
