@@ -3,3 +3,10 @@
 ### There are tons of E-Learning courses available which creates harder to find out best-suited courses. This problem is solved using this Solution It gives different filters and provides the best recommendations considering all of them.
 ### This solution targets Coursera for recommendations.
 ### https://vikramsh2002-vrl-e-learning-course-recommender-webdeploy-fwgv8b.streamlitapp.com/
+
+## Validator Mode
+
+The practice validator has one simple setting:
+
+- `VRL_VALIDATOR_MODE=free` uses the built-in no-key scorer. This is the default and works on Streamlit Cloud.
+- `VRL_VALIDATOR_MODE=smart` uses a stronger local open-source model only when the deployment has the package and resources. If not, it safely falls back to `free`.

@@ -26,9 +26,12 @@ MAX_RECOMMENDATIONS = 12
 SORT_SIMILARITY = "Similarity first"
 SORT_HIGH_TO_LOW = "Rating high to low"
 SORT_LOW_TO_HIGH = "Rating low to high"
+VALIDATOR_MODE_ENV = "VRL_VALIDATOR_MODE"
 VALIDATOR_BACKEND_ENV = "VRL_VALIDATOR_BACKEND"
 VALIDATOR_PROFILE_ENV = "VRL_AI_PROFILE"
 VALIDATOR_MODEL_ENV = "VRL_VALIDATOR_MODEL"
+VALIDATOR_FREE = "free"
+VALIDATOR_SMART = "smart"
 VALIDATOR_TFIDF = "tfidf"
 VALIDATOR_MINILM = "minilm"
 
@@ -2037,18 +2040,23 @@ def practice_unique_word_count(text: str) -> int:
     )
 
 
-def validation_runtime_profile() -> str:
-    configured = normalize_phrase(os.getenv(VALIDATOR_PROFILE_ENV, ""))
-    if configured in {"limited", "streamlit", "streamlit cloud", "streamlit free"}:
-        return "limited"
-    if configured in {"scaled", "server", "production"}:
-        return "scaled"
+def validator_mode() -> str:
+    mode = normalize_phrase(os.getenv(VALIDATOR_MODE_ENV, ""))
+    if mode in {"smart", "ai", "large", "advanced"}:
+        return VALIDATOR_SMART
+    if mode in {"free", "light", "basic", "streamlit"}:
+        return VALIDATOR_FREE
 
-    cwd = Path.cwd().as_posix().lower()
-    home = str(Path.home()).lower()
-    if cwd.startswith("/mount/src") or "streamlit" in cwd or home.endswith("/adminuser"):
-        return "limited"
-    return "local"
+    legacy_backend = normalize_phrase(os.getenv(VALIDATOR_BACKEND_ENV, ""))
+    legacy_profile = normalize_phrase(os.getenv(VALIDATOR_PROFILE_ENV, ""))
+    if legacy_backend in {"minilm", "sentence transformers", "sentence transformer", "embedding"}:
+        return VALIDATOR_SMART
+    if legacy_backend in {"tfidf", "light", "semantic light", "streamlit"}:
+        return VALIDATOR_FREE
+    if legacy_profile in {"scaled", "server", "production"}:
+        return VALIDATOR_SMART
+
+    return VALIDATOR_FREE
 
 
 def optional_module_available(module_name: str) -> bool:
@@ -2056,15 +2064,11 @@ def optional_module_available(module_name: str) -> bool:
 
 
 def choose_validation_backend() -> dict[str, object]:
-    requested = normalize_phrase(os.getenv(VALIDATOR_BACKEND_ENV, "auto"))
-    profile = validation_runtime_profile()
+    mode = validator_mode()
     model_name = os.getenv(VALIDATOR_MODEL_ENV, "sentence-transformers/all-MiniLM-L6-v2")
+    smart_available = optional_module_available("sentence_transformers")
 
-    if requested in {"tfidf", "light", "semantic light", "streamlit"}:
-        backend = VALIDATOR_TFIDF
-    elif requested in {"minilm", "sentence transformers", "sentence transformer", "embedding"}:
-        backend = VALIDATOR_MINILM if optional_module_available("sentence_transformers") else VALIDATOR_TFIDF
-    elif profile == "scaled" and optional_module_available("sentence_transformers"):
+    if mode == VALIDATOR_SMART and smart_available:
         backend = VALIDATOR_MINILM
     else:
         backend = VALIDATOR_TFIDF
@@ -2072,20 +2076,24 @@ def choose_validation_backend() -> dict[str, object]:
     if backend == VALIDATOR_MINILM:
         return {
             "backend": VALIDATOR_MINILM,
-            "label": "MiniLM semantic",
-            "profile": profile,
+            "label": "Smart",
+            "mode": VALIDATOR_SMART,
             "model": model_name,
             "threshold": 0.42,
-            "note": "Open-source embedding evaluator for scaled deployments.",
+            "note": "Uses a local open-source model when the deployment has enough resources.",
         }
+
+    note = "No API key, no model download, safe for Streamlit Cloud."
+    if mode == VALIDATOR_SMART and not smart_available:
+        note = "Smart mode was requested, but the model package is not installed; using Free mode safely."
 
     return {
         "backend": VALIDATOR_TFIDF,
-        "label": "Light semantic",
-        "profile": profile,
-        "model": "scikit-learn TF-IDF",
+        "label": "Free",
+        "mode": VALIDATOR_FREE,
+        "model": "built-in semantic scorer",
         "threshold": 0.08,
-        "note": "Streamlit-safe evaluator with no model download or credentials.",
+        "note": note,
     }
 
 
@@ -2130,10 +2138,11 @@ def semantic_similarity(left_text: str, right_text: str, backend_info: dict[str,
             return minilm_semantic_similarity(left_text, right_text, str(backend_info.get("model", "")))
         except Exception:
             backend_info["backend"] = VALIDATOR_TFIDF
-            backend_info["label"] = "Light semantic"
-            backend_info["model"] = "scikit-learn TF-IDF"
+            backend_info["label"] = "Free"
+            backend_info["mode"] = VALIDATOR_FREE
+            backend_info["model"] = "built-in semantic scorer"
             backend_info["threshold"] = 0.08
-            backend_info["note"] = "MiniLM was unavailable, so validation fell back to the Streamlit-safe evaluator."
+            backend_info["note"] = "Smart mode was unavailable, so validation fell back to Free mode."
     return tfidf_semantic_similarity(left_text, right_text)
 
 
@@ -2187,9 +2196,9 @@ def validate_practice_attempt(
         )
         semantic_scores.append(
             {
-                "criterion": label,
-                "score": round(score, 3),
-                "passed": criterion_passed,
+                "Requirement": label,
+                "Match score": round(score, 3),
+                "Passed": "Yes" if criterion_passed else "No",
             }
         )
         if criterion_passed:
@@ -2511,7 +2520,7 @@ def render_advisor_roadmap(
             st.markdown(f"**Task:** {task_body}")
             st.caption(f"Minimum evidence target: {minimum_words} words. Complete a course to make this practice follow your progress.")
             st.caption(
-                f"Validator engine: {validator_info['label']} ({validator_info['profile']} profile) - {validator_info['note']}"
+                f"Validator mode: {validator_info['label']} - {validator_info['note']}"
             )
             st.markdown("##### Expected deliverables")
             render_check_items(deliverables)
@@ -2573,10 +2582,10 @@ def render_advisor_roadmap(
                 with missing_col:
                     st.markdown("##### Missing")
                     render_check_items(result.get("missing", []))
-                with st.expander("Semantic evidence scores", expanded=False):
+                with st.expander("Why this result?", expanded=False):
                     backend = result.get("backend", {})
                     st.caption(
-                        f"{backend.get('label', 'Validator')} using {backend.get('model', 'local model')}"
+                        f"Mode: {backend.get('label', 'Validator')} | Engine: {backend.get('model', 'local scorer')}"
                     )
                     st.dataframe(
                         pd.DataFrame(result.get("semantic_scores", [])),
@@ -2584,7 +2593,7 @@ def render_advisor_roadmap(
                         width="stretch",
                     )
             else:
-                st.info("Fill the three fields and run validation. The app will use the best no-credential validator available for this deployment profile.")
+                st.info("Fill the three fields and run validation. Default mode is Free, which works on Streamlit Cloud without credentials.")
 
     with deeper_tab:
         for index, (question, options, answer_index) in enumerate(bundle["mcqs"], start=1):
