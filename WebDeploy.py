@@ -26,6 +26,7 @@ MAX_RECOMMENDATIONS = 12
 SORT_SIMILARITY = "Similarity first"
 SORT_HIGH_TO_LOW = "Rating high to low"
 SORT_LOW_TO_HIGH = "Rating low to high"
+DEFAULT_LANGUAGE = "English"
 VALIDATOR_MODE_ENV = "VRL_VALIDATOR_MODE"
 VALIDATOR_BACKEND_ENV = "VRL_VALIDATOR_BACKEND"
 VALIDATOR_PROFILE_ENV = "VRL_AI_PROFILE"
@@ -87,6 +88,7 @@ REQUIRED_COLUMNS = [
 
 CATALOG_COLUMNS = [
     *REQUIRED_COLUMNS,
+    "Language",
     "Provider",
     "Category",
     "Course Key",
@@ -290,6 +292,51 @@ def inject_styles() -> None:
             color: var(--vrl-text);
         }
 
+        .vrl-section-copy {
+            color: var(--vrl-muted);
+            font-size: 0.9rem;
+            line-height: 1.45;
+            margin: -0.2rem 0 0.8rem;
+            max-width: 48rem;
+        }
+
+        .vrl-mode-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin: 0.25rem 0 1rem;
+        }
+
+        .vrl-mode-card {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background:
+                linear-gradient(180deg, rgba(16, 24, 33, 0.94), rgba(10, 16, 24, 0.94));
+            padding: 0.82rem 0.9rem;
+            min-height: 6.2rem;
+        }
+
+        .vrl-mode-kicker {
+            color: var(--vrl-gold);
+            font-size: 0.75rem;
+            font-weight: 760;
+            margin-bottom: 0.28rem;
+        }
+
+        .vrl-mode-title {
+            color: var(--vrl-text);
+            font-size: 0.96rem;
+            font-weight: 760;
+            line-height: 1.25;
+            margin-bottom: 0.28rem;
+        }
+
+        .vrl-mode-copy {
+            color: var(--vrl-muted);
+            font-size: 0.83rem;
+            line-height: 1.38;
+        }
+
         .vrl-card-top {
             display: flex;
             align-items: center;
@@ -366,6 +413,10 @@ def inject_styles() -> None:
             padding: 1.15rem;
         }
 
+        .vrl-empty strong {
+            color: var(--vrl-text);
+        }
+
         .vrl-small-note {
             color: var(--vrl-muted);
             font-size: 0.86rem;
@@ -427,6 +478,41 @@ def inject_styles() -> None:
             color: var(--vrl-muted);
             font-size: 0.84rem;
             margin: 0.15rem 0 0;
+        }
+
+        .vrl-similarity-summary {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) repeat(3, minmax(0, 0.75fr));
+            gap: 0.65rem;
+            margin: 0.8rem 0 0.2rem;
+        }
+
+        .vrl-similarity-stat {
+            border: 1px solid var(--vrl-border);
+            border-radius: 8px;
+            background: rgba(16, 24, 33, 0.72);
+            padding: 0.68rem 0.72rem;
+            min-width: 0;
+        }
+
+        .vrl-similarity-label {
+            color: var(--vrl-muted);
+            font-size: 0.75rem;
+            font-weight: 680;
+            margin-bottom: 0.22rem;
+        }
+
+        .vrl-similarity-value {
+            color: var(--vrl-text);
+            font-size: 0.92rem;
+            font-weight: 740;
+            line-height: 1.28;
+            overflow-wrap: anywhere;
+        }
+
+        .vrl-similarity-value-muted {
+            color: var(--vrl-muted);
+            font-weight: 650;
         }
 
         .vrl-roadmap {
@@ -527,6 +613,7 @@ def inject_styles() -> None:
         }
 
         @media (max-width: 920px) {
+            .vrl-mode-grid,
             .vrl-roadmap {
                 grid-template-columns: 1fr;
             }
@@ -535,6 +622,7 @@ def inject_styles() -> None:
                 grid-template-columns: 1fr;
             }
 
+            .vrl-similarity-summary,
             .vrl-progress-summary {
                 grid-template-columns: 1fr;
             }
@@ -624,6 +712,18 @@ def inject_styles() -> None:
             color: #ffffff;
         }
 
+        div.stButton > button[kind="primary"] p,
+        div[data-testid="stLinkButton"] > a[kind="primary"] p {
+            color: #ffffff;
+        }
+
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-primary"] p,
+        a[data-testid="stBaseLinkButton-primary"],
+        a[data-testid="stBaseLinkButton-primary"] p {
+            color: #ffffff !important;
+        }
+
         div.stButton > button:hover,
         div[data-testid="stLinkButton"] > a:hover {
             border-color: var(--vrl-blue-bright);
@@ -706,6 +806,8 @@ def load_courses(data_mtime: float) -> pd.DataFrame:
                 courses[column] = "Coursera"
             elif column == "Category":
                 courses[column] = "Coursera"
+            elif column == "Language":
+                courses[column] = DEFAULT_LANGUAGE
             else:
                 courses[column] = ""
 
@@ -722,6 +824,7 @@ def load_courses(data_mtime: float) -> pd.DataFrame:
         "Course Description",
         "Skills",
         "Tags",
+        "Language",
         "Provider",
         "Category",
         "Course Key",
@@ -732,6 +835,7 @@ def load_courses(data_mtime: float) -> pd.DataFrame:
 
     courses["Provider"] = courses["Provider"].replace("", "Coursera")
     courses["Category"] = courses["Category"].replace("", "Coursera")
+    courses["Language"] = courses["Language"].replace("", DEFAULT_LANGUAGE)
     courses = courses.reset_index(drop=True)
     empty_keys = courses["Course Key"] == ""
     courses.loc[empty_keys, "Course Key"] = courses[empty_keys].apply(course_key_from_row, axis=1)
@@ -742,6 +846,8 @@ def load_courses(data_mtime: float) -> pd.DataFrame:
         + courses["University"]
         + " "
         + courses["Provider"]
+        + " "
+        + courses["Language"]
         + " "
         + courses["Category"]
         + " "
@@ -828,6 +934,7 @@ def reset_filters() -> None:
     for key in (
         "catalog_search",
         "course_provider",
+        "course_language",
         "difficulty_level",
         "university",
         "rating_sort",
@@ -970,6 +1077,34 @@ def smart_filter_difficulty(request_text: str, difficulties: list[str]) -> str:
     return ALL_OPTION
 
 
+def smart_filter_language(request_text: str, languages: list[str]) -> str:
+    language_aliases = {
+        "English": ("english",),
+        "Spanish": ("spanish", "espanol", "español"),
+        "French": ("french", "francais", "français"),
+        "German": ("german", "deutsch"),
+        "Hindi": ("hindi",),
+        "Arabic": ("arabic",),
+        "Chinese": ("chinese", "mandarin"),
+        "Japanese": ("japanese",),
+        "Korean": ("korean",),
+        "Portuguese": ("portuguese",),
+        "Russian": ("russian",),
+        "Italian": ("italian",),
+    }
+    available = set(languages)
+    for language, aliases in language_aliases.items():
+        if language in available and any(phrase_in_text(alias, request_text) for alias in aliases):
+            return language
+
+    matches = [
+        language
+        for language in languages
+        if language != ALL_OPTION and phrase_in_text(normalize_phrase(language), request_text)
+    ]
+    return max(matches, key=len) if matches else ALL_OPTION
+
+
 def smart_filter_university(request_text: str, courses: pd.DataFrame) -> str:
     matches: list[str] = []
     for university in courses["University"].dropna().unique():
@@ -1001,13 +1136,14 @@ def smart_filter_skills(request_text: str, courses: pd.DataFrame, limit: int = 8
 def smart_filter_search_terms(
     request: str,
     provider: str,
+    language: str,
     difficulty_level: str,
     university: str,
     selected_skills: Iterable[str],
 ) -> str:
     tokens = re.findall(r"[a-z0-9+#.]+", request.lower())
     blocked = set(SMART_FILTER_STOPWORDS)
-    for value in (provider, difficulty_level, university, *selected_skills):
+    for value in (provider, language, difficulty_level, university, *selected_skills):
         if value != ALL_OPTION:
             blocked.update(normalize_phrase(value).split())
 
@@ -1022,14 +1158,17 @@ def smart_filter_search_terms(
 def interpret_smart_filter(courses: pd.DataFrame, request: str) -> dict[str, object]:
     request_text = normalize_phrase(request)
     providers = options_from(courses["Provider"])
+    languages = options_from(courses["Language"])
     difficulties = difficulty_options(courses)
     provider = smart_filter_provider(request_text, providers)
+    language = smart_filter_language(request_text, languages)
     difficulty_level = smart_filter_difficulty(request_text, difficulties)
 
     scoped = apply_filters(
         courses,
         "",
         provider,
+        language,
         difficulty_level,
         ALL_OPTION,
         [],
@@ -1039,6 +1178,7 @@ def interpret_smart_filter(courses: pd.DataFrame, request: str) -> dict[str, obj
     search_query = smart_filter_search_terms(
         request,
         provider,
+        language,
         difficulty_level,
         university,
         selected_skills,
@@ -1047,6 +1187,7 @@ def interpret_smart_filter(courses: pd.DataFrame, request: str) -> dict[str, obj
     return {
         "search_query": search_query,
         "provider": provider,
+        "language": language,
         "difficulty_level": difficulty_level,
         "university": university,
         "selected_skills": selected_skills,
@@ -1059,6 +1200,7 @@ def apply_smart_filter(courses: pd.DataFrame, request: str) -> str:
         for key in (
             "catalog_search",
             "course_provider",
+            "course_language",
             "difficulty_level",
             "university",
             "rating_sort",
@@ -1073,6 +1215,7 @@ def apply_smart_filter(courses: pd.DataFrame, request: str) -> str:
     result = interpret_smart_filter(courses, request)
     st.session_state["catalog_search"] = result["search_query"]
     st.session_state["course_provider"] = result["provider"]
+    st.session_state["course_language"] = result["language"]
     st.session_state["difficulty_level"] = result["difficulty_level"]
     st.session_state["university"] = result["university"]
     st.session_state["selected_skills"] = list(result["selected_skills"])
@@ -1082,6 +1225,8 @@ def apply_smart_filter(courses: pd.DataFrame, request: str) -> str:
     summary_parts: list[str] = []
     if result["provider"] != ALL_OPTION:
         summary_parts.append(f"provider {result['provider']}")
+    if result["language"] != ALL_OPTION:
+        summary_parts.append(f"language {result['language']}")
     if result["difficulty_level"] != ALL_OPTION:
         summary_parts.append(f"difficulty {result['difficulty_level']}")
     if result["university"] != ALL_OPTION:
@@ -1451,6 +1596,7 @@ def apply_filters(
     courses: pd.DataFrame,
     search_query: str,
     provider: str,
+    language: str,
     difficulty_level: str,
     university: str,
     selected_skills: Iterable[str],
@@ -1464,6 +1610,9 @@ def apply_filters(
 
     if provider != ALL_OPTION:
         filtered = filtered[filtered["Provider"] == provider]
+
+    if language != ALL_OPTION:
+        filtered = filtered[filtered["Language"] == language]
 
     if difficulty_level != ALL_OPTION:
         filtered = filtered[filtered["Difficulty Level"] == difficulty_level]
@@ -1567,13 +1716,15 @@ def sort_recommendations(recommendations: pd.DataFrame, sort_order: str) -> pd.D
 def filter_key(
     search_query: str,
     provider: str,
+    language: str,
     difficulty_level: str,
     university: str,
     selected_skills: Iterable[str],
-) -> tuple[str, str, str, str, tuple[str, ...]]:
+) -> tuple[str, str, str, str, str, tuple[str, ...]]:
     return (
         search_query.strip().lower(),
         provider,
+        language,
         difficulty_level,
         university,
         tuple(sorted(selected_skills or ())),
@@ -1616,6 +1767,38 @@ def render_metrics(courses: pd.DataFrame, filtered_courses: pd.DataFrame) -> Non
     cols[3].metric("Average rating", f"{avg_rating:.2f}", border=True)
 
 
+def render_section_heading(title: str, copy: str | None = None) -> None:
+    body = f'<div class="vrl-section-title">{escape(title)}</div>'
+    if copy:
+        body += f'<div class="vrl-section-copy">{escape(copy)}</div>'
+    st.markdown(body, unsafe_allow_html=True)
+
+
+def render_recommend_flow() -> None:
+    st.markdown(
+        """
+        <div class="vrl-mode-grid">
+            <div class="vrl-mode-card">
+                <div class="vrl-mode-kicker">1. Start with intent</div>
+                <div class="vrl-mode-title">AI Learning Navigator</div>
+                <div class="vrl-mode-copy">Best when the learner has a goal, role, domain, or roadmap question.</div>
+            </div>
+            <div class="vrl-mode-card">
+                <div class="vrl-mode-kicker">2. Match from a course</div>
+                <div class="vrl-mode-title">Course similarity</div>
+                <div class="vrl-mode-copy">Best when the learner already completed, liked, or selected one course.</div>
+            </div>
+            <div class="vrl-mode-card">
+                <div class="vrl-mode-kicker">3. Keep practice aligned</div>
+                <div class="vrl-mode-title">Progress tracker</div>
+                <div class="vrl-mode-copy">Best for calibrating practice tasks and checks to the learner's current level.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_skill_chips(skills: Iterable[str], limit: int = 5) -> None:
     visible = list(skills or ())[:limit]
     if not visible:
@@ -1652,6 +1835,7 @@ def render_course_card(
 
     rank_text = f"#{rank}" if rank is not None else "Course"
     difficulty = escape(str(course["Difficulty Level"]))
+    language = escape(str(course.get("Language", DEFAULT_LANGUAGE)))
 
     with st.container(border=True):
         st.markdown(
@@ -1662,7 +1846,7 @@ def render_course_card(
             </div>
             <div class="vrl-course-title">{escape(course_name)}</div>
             <div class="vrl-meta">
-                {escape(str(course["University"]))} | {float(course["Rating"]):.1f}/5
+                {escape(str(course["University"]))} | {language} | {float(course["Rating"]):.1f}/5
             </div>
             """,
             unsafe_allow_html=True,
@@ -2659,7 +2843,7 @@ def submit_advisor_request(
     filtered_courses: pd.DataFrame,
     catalog_courses: pd.DataFrame,
     recommendation_resources: dict,
-    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
+    active_filter_key: tuple[str, str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
     progress_note = progress_note_from_request(request, catalog_courses)
@@ -2701,7 +2885,7 @@ def render_advisor_chat(
     filtered_courses: pd.DataFrame,
     catalog_courses: pd.DataFrame,
     recommendation_resources: dict,
-    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
+    active_filter_key: tuple[str, str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
     st.markdown(
@@ -2709,8 +2893,8 @@ def render_advisor_chat(
         <div class="vrl-advisor-head">
             <div class="vrl-bot-avatar">AI</div>
             <div>
-                <p class="vrl-advisor-name">Learning Navigator</p>
-                <p class="vrl-advisor-status">Building a local learning bundle</p>
+                <p class="vrl-advisor-name">AI Learning Navigator</p>
+                <p class="vrl-advisor-status">Describe a goal and get a focused learning bundle</p>
             </div>
         </div>
         """,
@@ -2795,7 +2979,7 @@ def render_advisor_chat(
         )
 
 
-def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list[str]]:
+def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, str, list[str]]:
     logo_uri = logo_data_uri()
     if logo_uri:
         st.sidebar.markdown(
@@ -2823,6 +3007,15 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list
         key="course_provider",
     )
 
+    languages = options_from(courses["Language"])
+    if st.session_state.get("course_language") not in languages:
+        st.session_state["course_language"] = ALL_OPTION
+    language = st.sidebar.selectbox(
+        "Spoken language",
+        languages,
+        key="course_language",
+    )
+
     difficulties = difficulty_options(courses)
     if st.session_state.get("difficulty_level") not in difficulties:
         st.session_state["difficulty_level"] = ALL_OPTION
@@ -2837,6 +3030,7 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list
         courses,
         search_query,
         provider,
+        language,
         difficulty_level,
         ALL_OPTION,
         st.session_state.get("selected_skills", []),
@@ -2889,17 +3083,15 @@ def render_sidebar(courses: pd.DataFrame) -> tuple[str, str, str, str, str, list
         on_click=reset_filters,
     )
 
-    return search_query, provider, difficulty_level, university, rating_sort, selected_skills
+    return search_query, provider, language, difficulty_level, university, rating_sort, selected_skills
 
 
 def render_progress_tracker(courses: pd.DataFrame) -> None:
-    st.markdown('<div class="vrl-section-title">Progress tracker</div>', unsafe_allow_html=True)
+    render_section_heading(
+        "Progress tracker",
+        "Completed courses keep practice tasks, checks, and roadmap anchors aligned to the learner's current level.",
+    )
     with st.container(border=True):
-        st.markdown(
-            '<div class="vrl-small-note">Mark completed courses so the practice workspace stays aligned to your current level.</div>',
-            unsafe_allow_html=True,
-        )
-
         course_label_map = courses.set_index("Course Key")["Course Name"].to_dict()
         course_options = courses.sort_values("Course Name")["Course Key"].astype(str).to_list()
         if not course_options:
@@ -2958,7 +3150,7 @@ def render_progress_tracker(courses: pd.DataFrame) -> None:
 
         if not completed.empty:
             with st.expander("Completed courses", expanded=False):
-                display = completed[["Course Name", "Provider", "Difficulty Level", "Rating"]].copy()
+                display = completed[["Course Name", "Provider", "Language", "Difficulty Level", "Rating"]].copy()
                 st.dataframe(display, hide_index=True, width="stretch")
 
 
@@ -2966,12 +3158,14 @@ def render_recommend_tab(
     courses: pd.DataFrame,
     filtered_courses: pd.DataFrame,
     recommendation_resources: dict,
-    active_filter_key: tuple[str, str, str, str, tuple[str, ...]],
+    active_filter_key: tuple[str, str, str, str, str, tuple[str, ...]],
     rating_sort: str,
 ) -> None:
-    render_progress_tracker(courses)
-    st.divider()
-
+    render_recommend_flow()
+    render_section_heading(
+        "AI Learning Navigator",
+        "Start here when the learner describes a goal, role, domain, or roadmap question in plain language.",
+    )
     render_advisor_chat(
         filtered_courses,
         courses,
@@ -2981,7 +3175,10 @@ def render_recommend_tab(
     )
 
     st.divider()
-    st.markdown('<div class="vrl-section-title">Course similarity</div>', unsafe_allow_html=True)
+    render_section_heading(
+        "Course similarity",
+        "Use this when there is already a completed, liked, or target course and the next step should stay close to it.",
+    )
 
     course_label_map = filtered_courses.set_index("Course Key")["Course Name"].to_dict()
     course_options = (
@@ -3001,40 +3198,73 @@ def render_recommend_tab(
         key="course_name",
     )
 
-    active_context = (selected_course, active_filter_key)
-    if st.session_state.get("recommendation_context") != active_context:
-        st.session_state["recommendations"] = None
+    selected_row = filtered_courses[
+        filtered_courses["Course Key"].astype(str) == str(selected_course)
+    ].iloc[0]
+    selected_skills = ", ".join(skill_labels_for_course(selected_row, limit=3)) or "No clear skill tags"
+    selected_provider = str(selected_row.get("Provider", selected_row.get("University", "Catalog")))
+    selected_language = str(selected_row.get("Language", DEFAULT_LANGUAGE))
+    selected_level = str(selected_row.get("Difficulty Level", "Mixed"))
+    selected_rating = float(selected_row.get("Rating", 0) or 0)
 
-    action_col, count_col = st.columns([0.22, 0.78], vertical_alignment="center")
+    action_col, note_col = st.columns([0.32, 0.68], vertical_alignment="center")
     with action_col:
-        find_matches = st.button(
-            "Find matches",
+        refresh_matches = st.button(
+            "Refresh matches",
             type="primary",
             width="stretch",
         )
-    with count_col:
+    with note_col:
         st.markdown(
-            f'<div class="vrl-small-note">{len(filtered_courses):,} courses in scope</div>',
+            f'<div class="vrl-small-note">{len(filtered_courses):,} courses in scope after filters</div>',
             unsafe_allow_html=True,
         )
 
-    if find_matches:
-        with st.status("Finding similar courses", expanded=False) as status:
-            with st.spinner("Comparing course signals", show_time=True):
-                recommendations = recommend_courses(
-                    selected_course,
-                    filtered_courses,
-                    recommendation_resources,
-                )
-            st.session_state["recommendations"] = recommendations
-            st.session_state["recommendation_context"] = active_context
-            status.update(label="Recommendations ready", state="complete", expanded=False)
-        st.toast("Recommendations ready")
+    st.markdown(
+        f"""
+        <div class="vrl-similarity-summary">
+            <div class="vrl-similarity-stat">
+                <div class="vrl-similarity-label">Selected course</div>
+                <div class="vrl-similarity-value">{escape(str(selected_row.get("Course Name", "")))}</div>
+            </div>
+            <div class="vrl-similarity-stat">
+                <div class="vrl-similarity-label">Source</div>
+                <div class="vrl-similarity-value">{escape(selected_provider)} <span class="vrl-similarity-value-muted">|</span> {escape(selected_language)}</div>
+            </div>
+            <div class="vrl-similarity-stat">
+                <div class="vrl-similarity-label">Level</div>
+                <div class="vrl-similarity-value">{escape(selected_level)}</div>
+            </div>
+            <div class="vrl-similarity-stat">
+                <div class="vrl-similarity-label">Signals</div>
+                <div class="vrl-similarity-value">{selected_rating:.1f}/5 <span class="vrl-similarity-value-muted">|</span> {escape(selected_skills)}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    active_context = (selected_course, active_filter_key)
+    context_changed = st.session_state.get("recommendation_context") != active_context
+    if context_changed:
+        st.session_state["recommendations"] = None
+
+    if refresh_matches or st.session_state.get("recommendations") is None:
+        with st.spinner("Matching nearby courses"):
+            recommendations = recommend_courses(
+                selected_course,
+                filtered_courses,
+                recommendation_resources,
+            )
+        st.session_state["recommendations"] = recommendations
+        st.session_state["recommendation_context"] = active_context
+        if refresh_matches:
+            st.toast("Similarity matches refreshed")
 
     recommendations = st.session_state.get("recommendations")
     if recommendations is None:
         st.markdown(
-            '<div class="vrl-empty">Select a course and run matching to populate this view.</div>',
+            '<div class="vrl-empty"><strong>Ready for a match.</strong><br>Select a course to calculate nearby options from the catalog.</div>',
             unsafe_allow_html=True,
         )
         return
@@ -3050,6 +3280,9 @@ def render_recommend_tab(
         key_prefix="recommend",
     )
 
+    st.divider()
+    render_progress_tracker(courses)
+
 
 def render_explore_tab(filtered_courses: pd.DataFrame) -> None:
     st.markdown('<div class="vrl-section-title">Catalog</div>', unsafe_allow_html=True)
@@ -3061,7 +3294,7 @@ def render_explore_tab(filtered_courses: pd.DataFrame) -> None:
     render_course_grid(preview, key_prefix="explore")
 
     table = filtered_courses[
-        ["Course Name", "University", "Difficulty Level", "Rating", "Course URL"]
+        ["Course Name", "Provider", "Language", "University", "Difficulty Level", "Rating", "Course URL"]
     ].sort_values(by=["Rating", "Course Name"], ascending=[False, True])
     st.dataframe(
         table.head(200),
@@ -3161,6 +3394,7 @@ def main() -> None:
     (
         search_query,
         provider,
+        language,
         difficulty_level,
         university,
         rating_sort,
@@ -3171,6 +3405,7 @@ def main() -> None:
         courses,
         search_query,
         provider,
+        language,
         difficulty_level,
         university,
         selected_skills,
@@ -3178,6 +3413,7 @@ def main() -> None:
     active_filter_key = filter_key(
         search_query,
         provider,
+        language,
         difficulty_level,
         university,
         selected_skills,
@@ -3191,7 +3427,7 @@ def main() -> None:
         st.stop()
 
     recommend_tab, explore_tab, shortlist_tab, insights_tab = st.tabs(
-        ["Recommend", "Explore", "Shortlist", "Insights"]
+        ["Navigator", "Explore", "Shortlist", "Insights"]
     )
 
     with recommend_tab:

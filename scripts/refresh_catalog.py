@@ -36,6 +36,7 @@ REPORT_DIR = ROOT / "reports"
 INDEX_PATH = ARTIFACT_DIR / "recommendation_index.joblib"
 QUARANTINE_PATH = REPORT_DIR / "link_quarantine.csv"
 REFRESH_REPORT_PATH = REPORT_DIR / "catalog_refresh_report.json"
+DEFAULT_LANGUAGE = "English"
 
 APP_COLUMNS = [
     "Course Name",
@@ -46,6 +47,7 @@ APP_COLUMNS = [
     "Course Description",
     "Skills",
     "Tags",
+    "Language",
     "Provider",
     "Category",
     "Course Key",
@@ -178,6 +180,142 @@ def normalize_text(value: object) -> str:
     return re.sub(r"\s+", " ", html.unescape(str(value or ""))).strip()
 
 
+SCRIPT_LANGUAGE_RANGES = (
+    ("Japanese", ((0x3040, 0x309F), (0x30A0, 0x30FF))),
+    ("Korean", ((0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F))),
+    ("Arabic", ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF))),
+    ("Hindi", ((0x0900, 0x097F),)),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Thai", ((0x0E00, 0x0E7F),)),
+    ("Greek", ((0x0370, 0x03FF),)),
+    ("Russian", ((0x0400, 0x04FF),)),
+)
+
+LATIN_LANGUAGE_TERMS = {
+    "Spanish": {
+        "análisis",
+        "atención",
+        "cálculo",
+        "claves",
+        "comercio",
+        "conceptos",
+        "conformidad",
+        "datos",
+        "diseño",
+        "domina",
+        "eléctricos",
+        "enfermo",
+        "escala",
+        "fundamentos",
+        "gestión",
+        "introducción",
+        "inmigración",
+        "movilidad",
+        "niños",
+        "prehospitalaria",
+        "precisión",
+        "protección",
+        "público",
+        "semicrítico",
+        "reciclaje",
+        "residuos",
+        "salud",
+        "técnica",
+        "sostenible",
+        "transformación",
+        "vehículos",
+    },
+    "French": {
+        "archéologie",
+        "associés",
+        "avènement",
+        "contenu",
+        "création",
+        "créer",
+        "données",
+        "étudiants",
+        "informatique",
+        "mise",
+        "octets",
+        "païens",
+        "publicités",
+        "réseau",
+        "réseaux",
+        "visuelle",
+    },
+    "Portuguese": {
+        "centrada",
+        "cliente",
+        "complexidade",
+        "educação",
+        "esportivas",
+        "federações",
+        "gerente",
+        "gestão",
+        "jornada",
+        "liderança",
+        "organização",
+        "prática",
+        "simulações",
+    },
+    "Hungarian": {
+        "eszközök",
+        "hatékony",
+        "megbirkózni",
+        "mentális",
+        "melyek",
+        "segítenek",
+        "tanulás",
+        "tantárgyakkal",
+    },
+    "German": {
+        "einführung",
+        "grundlagen",
+    },
+    "Italian": {
+        "introduzione",
+        "programmazione",
+    },
+}
+
+
+def character_count_in_ranges(text: str, ranges: Iterable[tuple[int, int]]) -> int:
+    return sum(
+        1
+        for char in text
+        if any(start <= ord(char) <= end for start, end in ranges)
+    )
+
+
+def detect_course_language(title: object, fallback: str = DEFAULT_LANGUAGE) -> str:
+    text = normalize_text(title)
+    if not text:
+        return fallback or DEFAULT_LANGUAGE
+
+    for language, ranges in SCRIPT_LANGUAGE_RANGES:
+        if character_count_in_ranges(text, ranges):
+            return language
+
+    cjk_count = character_count_in_ranges(text, ((0x4E00, 0x9FFF), (0x3400, 0x4DBF)))
+    if cjk_count:
+        return "Chinese"
+
+    lowered = text.casefold()
+    if " à " in f" {lowered} ":
+        return "French"
+
+    tokens = set(re.findall(r"[a-zÀ-ÖØ-öø-ÿ]+", lowered))
+    scores = {
+        language: len(tokens.intersection(terms))
+        for language, terms in LATIN_LANGUAGE_TERMS.items()
+    }
+    language, score = max(scores.items(), key=lambda item: item[1])
+    if score >= 2 or (score == 1 and any(char in lowered for char in "áéíóúñçãõàèìòùâêîôûäëïöüőű")):
+        return language
+
+    return fallback or DEFAULT_LANGUAGE
+
+
 def canonical_url(url: str) -> str:
     parsed = urllib.parse.urlsplit(str(url).strip())
     scheme = parsed.scheme or "https"
@@ -278,6 +416,7 @@ def make_record(
     description: str,
     skills: str,
     category: str,
+    language: str = DEFAULT_LANGUAGE,
     verified: str = "",
 ) -> dict[str, object]:
     title = normalize_text(title)
@@ -285,11 +424,14 @@ def make_record(
     description = normalize_text(description) or title
     skills = normalize_text(skills) or category or provider
     category = normalize_text(category) or provider
+    language = normalize_text(language)
+    if not language or language == DEFAULT_LANGUAGE:
+        language = detect_course_language(title, language or DEFAULT_LANGUAGE)
     url = canonical_url(url)
     tags = normalize_text(
         f"{title} {description} taught by {university}. "
         f"The provider is {provider}. The level of course is {difficulty}. "
-        f"You will learn {skills} {category}."
+        f"The spoken language is {language}. You will learn {skills} {category}."
     ).lower()
     return {
         "Course Name": title,
@@ -300,6 +442,7 @@ def make_record(
         "Course Description": description,
         "Skills": skills,
         "Tags": tags,
+        "Language": language,
         "Provider": provider,
         "Category": category,
         "Course Key": slug_key(provider, url, title),
@@ -341,6 +484,8 @@ def existing_records() -> list[dict[str, object]]:
                 df[column] = "Coursera"
             elif column == "Category":
                 df[column] = "Coursera"
+            elif column == "Language":
+                df[column] = DEFAULT_LANGUAGE
             elif column == "Course Key":
                 df[column] = [
                     slug_key("Coursera", row["Course URL"], row["Course Name"])
@@ -353,6 +498,13 @@ def existing_records() -> list[dict[str, object]]:
     df = df[APP_COLUMNS].copy()
     df["Provider"] = df["Provider"].fillna("").replace("", "Coursera")
     df["Category"] = df["Category"].fillna("").replace("", "Coursera")
+    df["Language"] = df["Language"].fillna("").replace("", DEFAULT_LANGUAGE)
+    df["Language"] = [
+        detect_course_language(row["Course Name"], row["Language"])
+        if row["Language"] == DEFAULT_LANGUAGE
+        else row["Language"]
+        for _, row in df.iterrows()
+    ]
     df["Course URL"] = df["Course URL"].map(canonical_url)
     df["Course Key"] = [
         row["Course Key"] or slug_key(row["Provider"], row["Course URL"], row["Course Name"])
@@ -974,6 +1126,7 @@ def text_for_index(row: pd.Series) -> str:
             "Course Description",
             "Skills",
             "Tags",
+            "Language",
             "Category",
             "University",
             "Provider",
@@ -1114,6 +1267,10 @@ def main() -> None:
     df = pd.DataFrame(final_records, columns=APP_COLUMNS)
     df = df[df["Course URL"].fillna("").astype(str).str.strip() != ""].copy()
     df["Rating"] = pd.to_numeric(df["Rating"], errors="coerce").fillna(0.0)
+    df["Language"] = [
+        detect_course_language(row["Course Name"], row["Language"])
+        for _, row in df.iterrows()
+    ]
     df = df.sort_values(by=["Provider", "Course Name"], kind="stable").reset_index(drop=True)
     df.to_csv(DATA_PATH)
     build_index(df, args.top_k)
@@ -1125,6 +1282,7 @@ def main() -> None:
         "quarantined_new_records": len(quarantined),
         "retained_unverified_existing_records": retained_unverified_existing,
         "providers": df["Provider"].value_counts().to_dict(),
+        "languages": df["Language"].value_counts().to_dict(),
         "index_path": str(INDEX_PATH.relative_to(ROOT)),
         "data_path": str(DATA_PATH.relative_to(ROOT)),
     }
